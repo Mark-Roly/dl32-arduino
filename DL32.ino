@@ -2,7 +2,7 @@
 
   DL32 v3 by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812
-  Last updated 03/01/2025
+  Last updated 04/01/2025
   https://github.com/Mark-Roly/DL32/
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,8 @@
     
 */
 
-#define codeVersion 20250103
+#define codeVersion 20250104
+#define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
 #include <Arduino.h>            // Arduino by Arduino https://github.com/arduino/ArduinoCore-avr/blob/master/cores/arduino
@@ -97,6 +98,13 @@ struct Config {
   char mqtt_password[32];
 };
 
+// Define struct for storing addressing configuration
+struct Addressing {
+  char localIP[16];
+  char subnetMask[16];
+  char gatewayIP[16];
+};
+
 #define exitButDur 5
 #define httpDur 5
 #define keypadDur 15 //tenths-of-seconds
@@ -131,6 +139,7 @@ boolean invalidKeyRead = false;
 boolean SD_present = false;
 boolean SD_mounted = false;
 boolean FFat_present = false;
+boolean staticIP = false;
 boolean doorOpen = true;
 boolean failSecure = true;
 boolean add_mode = false;
@@ -152,8 +161,9 @@ volatile int watchdogCount = 0;
 // Define onboard and offvoard neopixels
 Adafruit_NeoPixel pixel = Adafruit_NeoPixel(NUMPIXELS, neopix_pin, NEO_GRB + NEO_KHZ800);
 
-// instantiate objects for Configuration struct, wifi client, webserver, mqtt client, qiegand reader and WDT timer
+// instantiate objects for Configuration struct, addressing struct, wifi client, webserver, mqtt client, qiegand reader and WDT timer
 Config config;
+Addressing addressing;
 WiFiClient esp32Client;
 WebServer webServer(80);
 PubSubClient MQTTclient(esp32Client);
@@ -663,40 +673,85 @@ void removeDir(fs::FS & fs, const char * path) {
 }
 
 // Loads the configuration from a file
-void loadFSJSON(const char* config_filename, Config& config) {
+void loadFSJSON_config(const char* config_filename, Config& config) {
   // Open file for reading
-  File file = FFat.open(config_filename);
+  File config_file = FFat.open(config_filename);
 
   // Allocate a temporary JsonDocument
-  JsonDocument doc;
+  JsonDocument config_doc;
 
   // Deserialize the JSON document
-  DeserializationError error = deserializeJson(doc, file);
+  DeserializationError error = deserializeJson(config_doc, config_file);
   if (error) {
-    Serial.println(F("Failed to read file, using default configuration"));
+    Serial.println(F("Failed to read configuration file, using default configuration"));
   }
-  strlcpy(config.wifi_enabled, doc["wifi_enabled"] | "false", sizeof(config.wifi_enabled));
-  strlcpy(config.wifi_ssid, doc["wifi_ssid"] | "null_wifi_ssid", sizeof(config.wifi_ssid));
-  strlcpy(config.wifi_password, doc["wifi_password"] | "null_wifi_pass", sizeof(config.wifi_password));
-  strlcpy(config.mqtt_enabled, doc["mqtt_enabled"] | "false", sizeof(config.mqtt_enabled));
-  strlcpy(config.mqtt_server, doc["mqtt_server"] | "null_mqtt_server", sizeof(config.mqtt_server));
-  strlcpy(config.mqtt_port, doc["mqtt_port"] | "1883", sizeof(config.mqtt_port));
-  strlcpy(config.mqtt_topic, doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_topic));
-  strlcpy(config.mqtt_stat_topic, doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_stat_topic));
-  strlcpy(config.mqtt_cmnd_topic, doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_cmnd_topic));
-  strlcpy(config.mqtt_keys_topic, doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_keys_topic));
-  strlcpy(config.mqtt_addr_topic, doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_addr_topic));
-  strlcpy(config.mqtt_uptm_topic, doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_uptm_topic));
+  strlcpy(config.wifi_enabled, config_doc["wifi_enabled"] | "false", sizeof(config.wifi_enabled));
+  strlcpy(config.wifi_ssid, config_doc["wifi_ssid"] | "null_wifi_ssid", sizeof(config.wifi_ssid));
+  strlcpy(config.wifi_password, config_doc["wifi_password"] | "null_wifi_pass", sizeof(config.wifi_password));
+  strlcpy(config.mqtt_enabled, config_doc["mqtt_enabled"] | "false", sizeof(config.mqtt_enabled));
+  strlcpy(config.mqtt_server, config_doc["mqtt_server"] | "null_mqtt_server", sizeof(config.mqtt_server));
+  strlcpy(config.mqtt_port, config_doc["mqtt_port"] | "1883", sizeof(config.mqtt_port));
+  strlcpy(config.mqtt_topic, config_doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_topic));
+  strlcpy(config.mqtt_stat_topic, config_doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_stat_topic));
+  strlcpy(config.mqtt_cmnd_topic, config_doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_cmnd_topic));
+  strlcpy(config.mqtt_keys_topic, config_doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_keys_topic));
+  strlcpy(config.mqtt_addr_topic, config_doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_addr_topic));
+  strlcpy(config.mqtt_uptm_topic, config_doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_uptm_topic));
   strcat(config.mqtt_stat_topic, "/stat");
   strcat(config.mqtt_cmnd_topic, "/cmnd");
   strcat(config.mqtt_keys_topic, "/keys");
   strcat(config.mqtt_addr_topic, "/addr");
   strcat(config.mqtt_uptm_topic, "/uptm");
-  strlcpy(config.mqtt_client_name, doc["mqtt_client_name"] | "DEFAULT_dl32s3", sizeof(config.mqtt_client_name));
-  strlcpy(config.mqtt_auth, doc["mqtt_auth"] | "true", sizeof(config.mqtt_auth));
-  strlcpy(config.mqtt_user, doc["mqtt_user"] | "mqtt", sizeof(config.mqtt_user));
-  strlcpy(config.mqtt_password, doc["mqtt_password"] | "null_mqtt_pass", sizeof(config.mqtt_password));
-  file.close();
+  strlcpy(config.mqtt_client_name, config_doc["mqtt_client_name"] | "DEFAULT_dl32s3", sizeof(config.mqtt_client_name));
+  strlcpy(config.mqtt_auth, config_doc["mqtt_auth"] | "true", sizeof(config.mqtt_auth));
+  strlcpy(config.mqtt_user, config_doc["mqtt_user"] | "mqtt", sizeof(config.mqtt_user));
+  strlcpy(config.mqtt_password, config_doc["mqtt_password"] | "null_mqtt_pass", sizeof(config.mqtt_password));
+  config_file.close();
+}
+
+// Loads the addressing from a file
+void loadFSJSON_addressing(const char* addressing_filename, Addressing& addressing) {
+  if (FFat.exists(addressing_filename) == false) {
+    Serial.println("No static addressing file found - Using dynamic addressing");
+    return;
+  }
+  // Open file for reading
+  File addressing_file = FFat.open(addressing_filename);
+
+  // Allocate a temporary JsonDocument
+  JsonDocument addressing_doc;
+
+  //Serial.print((char)addressing_file.read());
+
+  // Deserialize the JSON document
+  DeserializationError error = deserializeJson(addressing_doc, addressing_file);
+
+  if (error) {
+    Serial.print("Failed to read addressing file: ");
+      switch (error.code()) {
+    case DeserializationError::Ok:
+        Serial.println("Deserialization succeeded");
+        break;
+    case DeserializationError::InvalidInput:
+        Serial.println("Invalid input!");
+        break;
+    case DeserializationError::NoMemory:
+        Serial.println("Not enough memory");
+        break;
+    default:
+        Serial.println("Deserialization failed");
+        break;
+    }
+    Serial.println("Using dynamic addressing");
+    return;
+  }
+  strlcpy(addressing.localIP, addressing_doc["localIP"] | "false", sizeof(addressing.localIP));
+  strlcpy(addressing.subnetMask, addressing_doc["subnetMask"] | "null_wifi_ssid", sizeof(addressing.subnetMask));
+  strlcpy(addressing.gatewayIP, addressing_doc["gatewayIP"] | "null_wifi_pass", sizeof(addressing.gatewayIP));
+  addressing_file.close();
+  staticIP = true;
+  Serial.println("Static addressing loaded");
+  return;
 }
 
 boolean configSDtoFFat() {
@@ -722,7 +777,7 @@ boolean configSDtoFFat() {
   return true;
 }
 
-void addressingSDtoFS() {
+void addressingSDtoFFat() {
   if ((SD_present == true) && (SD.exists(addressing_filename))) {
     File sourceFile = SD.open(addressing_filename);
     File destFile = FFat.open(addressing_filename, FILE_WRITE);
@@ -739,6 +794,66 @@ void addressingSDtoFS() {
   }
   Serial.println("Addressing file successfuly copied from SD to FFat");
   ESP.restart();
+}
+
+boolean allSDtoFFat() {
+  int copiedFileCount = 0;
+  if ((SD_present == true) && (SD.exists(config_filename))) {
+    File sourceFile = SD.open(config_filename);
+    File destFile = FFat.open(config_filename, FILE_WRITE);
+    static uint8_t buf[1];
+    while ( sourceFile.read( buf, 1) ) {
+      destFile.write( buf, 1 );
+    }
+    destFile.close();
+    sourceFile.close();
+    copiedFileCount++;
+  } else {
+    Serial.print("No SD Card Mounted or no such file: ");
+    Serial.println(config_filename);
+  }
+  if ((SD_present == true) && (SD.exists(addressing_filename))) {
+    File sourceFile = SD.open(addressing_filename);
+    File destFile = FFat.open(addressing_filename, FILE_WRITE);
+    static uint8_t buf[1];
+    while ( sourceFile.read( buf, 1) ) {
+      destFile.write( buf, 1 );
+    }
+    destFile.close();
+    sourceFile.close();
+    copiedFileCount++;
+  } else {
+    Serial.print("No SD Card Mounted or no such file: ");
+    Serial.println(addressing_filename);
+  }
+  if ((SD_present == true) && (SD.exists(keys_filename))) {
+    File sourceFile = SD.open(keys_filename);
+    File destFile = FFat.open(keys_filename, FILE_WRITE);
+    static uint8_t buf[1];
+    while ( sourceFile.read( buf, 1) ) {
+      destFile.write( buf, 1 );
+    }
+    destFile.close();
+    sourceFile.close();
+    copiedFileCount;;
+  } else {
+    Serial.print("No SD Card Mounted or no such file: ");
+    Serial.println(keys_filename);
+  }
+  if (copiedFileCount > 0) {
+    playSuccessTone();
+    Serial.print(copiedFileCount);
+    Serial.println(" files successfuly copied from SD to FFat");
+    Serial.println("Restarting...");
+    Serial.print("");
+    ESP.restart();
+    return true;
+  } else {
+    playUnauthorizedTone();
+    Serial.println("No SD Card Mounted or no valid files");
+    return false;
+  }
+  
 }
 
 void keysSDtoFFat() {
@@ -847,8 +962,31 @@ void setPixBlue() {
 
 // --- Wifi Functions --- Wifi Functions --- Wifi Functions --- Wifi Functions --- Wifi Functions --- Wifi Functions --- Wifi Functions ---
 
-int connectWifi() {
+// Function to convert sgtring-format IP address into ip address object
+IPAddress stringToIPAddress(const char* ipStr) {
+    // Split the input string by periods '.'
+    uint8_t bytes[4];
+    int byteIndex = 0;
 
+    // Convert each part of the string to a byte
+    char* token = strtok((char*)ipStr, ".");
+    while (token != NULL && byteIndex < 4) {
+        bytes[byteIndex] = atoi(token);
+        token = strtok(NULL, ".");
+        byteIndex++;
+    }
+
+    // Return the IPAddress object
+    return IPAddress(bytes[0], bytes[1], bytes[2], bytes[3]);
+}
+
+int connectWifi() {
+  // Configures static IP address
+  if (staticIP == true) {
+    if (!WiFi.config(stringToIPAddress(addressing.localIP), stringToIPAddress(addressing.gatewayIP), stringToIPAddress(addressing.subnetMask))) {
+      Serial.println("STA Failed to configure");
+    }
+  }
   WiFi.mode(WIFI_STA); //Optional
   Serial.print("Connecting to SSID " + (String)config.wifi_ssid);
   //Serial.print(" with password ");
@@ -1056,7 +1194,7 @@ void checkAUX() {
     }
     if (count > 499) {
       setPixPurple();
-      Serial.println("Release button now to upload config (SD->FFAT)");
+      Serial.println("Release button now to upload files (SD->FFAT)");
       playUploadTone();
     }
     while ((digitalRead(AUXButton_pin) == LOW) && (count < 1000)) {
@@ -1079,11 +1217,9 @@ void checkAUX() {
     }
     
     if ((count > 499)&&(count < 1000)) {
-      Serial.print("Uploading config file ");
-      Serial.print(config_filename);
-      Serial.println(" from SD card to FFat");
+      Serial.println("Uploading config, addressing and key files from SD card to FFat...");
       delay(1000);
-      configSDtoFFat();
+      allSDtoFFat();
       delay(1000);
     } else if ((count > 999)&&(count < 1500)) {
       Serial.println("Purging stored keys... ");
@@ -1672,6 +1808,8 @@ boolean executeCommand(String command) {
     listDir(SD, "/", 0);
   } else if (command.equals("list_keys")) {
     outputKeys();
+  } else if (command.equals("purge_addressing")) {
+    deleteFile(FFat, addressing_filename);
   } else if (command.equals("purge_keys")) {
     deleteFile(FFat, keys_filename);
   } else if (command.equals("purge_config")) {
@@ -2032,7 +2170,22 @@ int parseSDAddressingFile () {
 }
 
 void saveAddressingStaticHTTP() {
-  //TODO
+  webServer.sendHeader("Location", "/",true);  
+  webServer.send(302, "text/plain", "");
+  Serial.println("Saving current addressing to static file");
+  if (MQTTclient.connected()) {
+    mqttPublish(config.mqtt_stat_topic, "Saving current addressing to static file");
+  } 
+  JsonDocument addressing_doc;
+  addressing_doc["localIP"] = WiFi.localIP().toString();
+  addressing_doc["subnetMask"] = WiFi.subnetMask().toString();
+  addressing_doc["gatewayIP"] = WiFi.gatewayIP().toString();
+  if (FFat.exists(addressing_filename)){
+    deleteFile(FFat, addressing_filename);
+  }
+  File addressing_file = FFat.open(addressing_filename, FILE_WRITE);
+  serializeJsonPretty(addressing_doc, addressing_file);
+  addressing_file.close();
 }
 
 void downloadAddressingStaticHTTP() {
@@ -2051,7 +2204,7 @@ void downloadAddressingStaticHTTP() {
 }
 
 void addressingStaticSDtoFFatHTTP() {
-  //addressingSDtoFFat();
+  addressingSDtoFFat();
   sendHTMLHeader();
   siteButtons();
   pageContent += F("<br/> <textarea readonly>Copied static addressing from SD to FFat</textarea>");
@@ -2062,14 +2215,13 @@ void addressingStaticSDtoFFatHTTP() {
 }
 
 void purgeAddressingStaticHTTP() {
+  webServer.sendHeader("Location", "/",true);  
+  webServer.send(302, "text/plain", "");
+  Serial.println("Static addressing file purged");
+  if (MQTTclient.connected()) {
+    mqttPublish(config.mqtt_stat_topic, "Static addressing file purged");
+  }  
   deleteFile(FFat, addressing_filename);
-  sendHTMLHeader();
-  siteButtons();
-  pageContent += F("<br/> <textarea readonly>static addressing purged</textarea>");
-  siteModes();
-  siteFooter();
-  sendHTMLContent();
-  sendHTMLStop();
 }
 
 // Output a list of FS files to serial
@@ -2234,6 +2386,20 @@ void siteButtons() {
   pageContent += F("<a href='/update'><button>Update firmware</button></a>");
   pageContent += F("<br/><br/>");
 
+  pageContent += F("<a class='header'>IP Addressing</a>");
+  //pageContent += F("<a href='/displayAddressingHTTP'><button style='background-color: #999999; color: #777777';>Show IP addressing</button></a>");
+  //pageContent += F("<br/>");
+  //pageContent += F("<a href='/outputAddressingHTTP'><button>Output IP addressing to Serial</button></a>");
+  //pageContent += F("<br/>");
+  pageContent += F("<a href='/saveAddressingStaticHTTP'><button>Save current addressing as static</button></a>");
+  pageContent += F("<br/>");
+  pageContent += F("<a href='/downloadAddressingStaticHTTP'><button>Download static addressing file</button></a>");
+  pageContent += F("<br/>");
+  pageContent += F("<a href='/addressingStaticSDtoFFatHTTP'><button>Upload static addressing SD to DL32</button></a>");
+  pageContent += F("<br/>");
+  pageContent += F("<a href='/purgeAddressingStaticHTTP'><button>Purge static addressing</button></a>");
+  pageContent += F("<br/><br/>");
+
   pageContent += F("<a class='header'>Key Management</a>");
   pageContent += F("<a href='/downloadKeysHTTP'><button>Download key file</button></a>");
   pageContent += F("<br/>");
@@ -2246,7 +2412,7 @@ void siteButtons() {
   pageContent += F("<a href='/addKeyModeHTTP'><button>Enter add key mode</button></a>");
   pageContent += F("<br/>");
   pageContent += F("<a href='/purgeKeysHTTP'><button>Purge stored keys</button></a>");
-  pageContent += F("<br/>");
+  pageContent += F("<br/><br/>");
 
   //pageContent += F("<a class='header'>Filesystem Operations</a>");
   //pageContent += F("<a href='/outputFSHTTP'><button>Output FFat Contents to Serial</button></a>");
@@ -2256,19 +2422,6 @@ void siteButtons() {
   //pageContent += F("<a href='/outputSDFSHTTP'><button>Output SD FS Contents to Serial</button></a>");
   //pageContent += F("<br/>");
   //pageContent += F("<a href='/displaySDFSHTTP'><button style='background-color: #999999; color: #777777';>Display SD FS contents in page</button></a>");
-  //pageContent += F("<br/>");
-  //pageContent += F("<a class='header'>IP Addressing</a>");
-  //pageContent += F("<a href='/displayAddressingHTTP'><button style='background-color: #999999; color: #777777';>Show IP addressing</button></a>");
-  //pageContent += F("<br/>");
-  //pageContent += F("<a href='/outputAddressingHTTP'><button>Output IP addressing to Serial</button></a>");
-  //pageContent += F("<br/>");
-  //pageContent += F("<a href='/saveAddressingStaticHTTP'><button style='background-color: #999999; color: #777777';>Save current addressing as static</button></a>");
-  //pageContent += F("<br/>");
-  //pageContent += F("<a href='/downloadAddressingStaticHTTP'><button style='background-color: #999999; color: #777777';>Download static addressing file</button></a>");
-  //pageContent += F("<br/>");
-  //pageContent += F("<a href='/addressingStaticSDtoFFatHTTP'><button style='background-color: #999999; color: #777777';>Upload static addressing SD to DL32</button></a>");
-  //pageContent += F("<br/>");
-  //pageContent += F("<a href='/purgeAddressingStaticHTTP'><button style='background-color: #999999; color: #777777';>Purge static addressing</button></a>");
   //pageContent += F("<br/>");
 }
 
@@ -2369,6 +2522,10 @@ void setup() {
   delay(500);
   Serial.begin(115200);
   delay(500);
+  Serial.println("");
+  Serial.println("================");
+  Serial.println("STARTUP SEQUENCE");
+  Serial.println("================");
   Serial.println("Initializing WDT...");
   secondTick.attach(1, ISRwatchdog);
   fatfs_setup();
@@ -2376,7 +2533,7 @@ void setup() {
   detectHardwareRevision();
   Serial.print("DL32 firmware version ");
   Serial.println(codeVersion);
-  Serial.println("configuring GPIO...");
+  Serial.println("Configuring GPIO...");
   Serial.flush();
   pinMode(buzzer_pin, OUTPUT);
   pinMode(lockRelay_pin, OUTPUT);
@@ -2394,9 +2551,13 @@ void setup() {
   pinMode(DS04, INPUT_PULLUP);
   digitalWrite(buzzer_pin, LOW);
   checkSDPresent(0);
+
   // Should load default config if run for the first time
-  Serial.println(F("Loading configuration..."));
-  loadFSJSON(config_filename, config);
+  Serial.println("Loading configuration...");
+  loadFSJSON_config(config_filename, config);
+
+  Serial.print("Loading addressing...");
+  loadFSJSON_addressing(addressing_filename, addressing);
 
   // Check Dip Switch states
   if (digitalRead(DS01) == LOW) {
