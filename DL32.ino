@@ -2,8 +2,8 @@
 
   DL32 v3 by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812
-  Last updated 04/01/2025
-  https://github.com/Mark-Roly/DL32/
+  Last updated 08/01/2025
+  https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
   Upload settings:
@@ -30,7 +30,7 @@
     
 */
 
-#define codeVersion 20250104
+#define codeVersion 20270108
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -967,7 +967,6 @@ IPAddress stringToIPAddress(const char* ipStr) {
     // Split the input string by periods '.'
     uint8_t bytes[4];
     int byteIndex = 0;
-
     // Convert each part of the string to a byte
     char* token = strtok((char*)ipStr, ".");
     while (token != NULL && byteIndex < 4) {
@@ -975,7 +974,6 @@ IPAddress stringToIPAddress(const char* ipStr) {
         token = strtok(NULL, ".");
         byteIndex++;
     }
-
     // Return the IPAddress object
     return IPAddress(bytes[0], bytes[1], bytes[2], bytes[3]);
 }
@@ -985,6 +983,7 @@ int connectWifi() {
   if (staticIP == true) {
     if (!WiFi.config(stringToIPAddress(addressing.localIP), stringToIPAddress(addressing.gatewayIP), stringToIPAddress(addressing.subnetMask))) {
       Serial.println("STA Failed to configure");
+      (staticIP == false);
     }
   }
   WiFi.mode(WIFI_STA); //Optional
@@ -1776,7 +1775,6 @@ boolean mqttPublish(char* topic, char* payload) {
 }
 
 // --- Hardware Revision Functions --- Hardware Revision Functions --- Hardware Revision Functions ---
-
 void detectHardwareRevision() {
   if ((float)(analogRead(attSensor_pin)/4095*3.3) == 0.00) {
     hwRev = 20240812;
@@ -1858,9 +1856,9 @@ boolean executeCommand(String command) {
 
 void listCmnds() {
   if (MQTTclient.connected()) {
-    MQTTclient.publish(config.mqtt_stat_topic, "add_key_mode\ncopy_config_sd_to_ffat\ncopy_keys_sd_to_ffat\ngarage_close\ngarage_open\ngarage_toggle\nlist_ffat\nlist_keys\nlist_sd\npurge_config\npurge_keys\nrestart\nring_bell\nshow_config\nshow_version\nunlock\nuptime\n");
+    MQTTclient.publish(config.mqtt_stat_topic, "add_key_mode\ncopy_config_sd_to_ffat\ncopy_keys_sd_to_ffat\ngarage_close\ngarage_open\ngarage_toggle\nlist_commands\nlist_ffat\nlist_keys\nlist_sd\npurge_addressing\npurge_config\npurge_keys\nrestart\nring_bell\nshow_config\nshow_version\nunlock\nuptime");
   }
-  Serial.printf("add_key_mode\ncopy_config_sd_to_ffat\ncopy_keys_sd_to_ffat\ngarage_close\ngarage_open\ngarage_toggle\nlist_ffat\nlist_keys\nlist_sd\npurge_config\npurge_keys\nrestart\nring_bell\nshow_config\nshow_version\nunlock\nuptime\n");
+  Serial.printf("add_key_mode\ncopy_config_sd_to_ffat\ncopy_keys_sd_to_ffat\ngarage_close\ngarage_open\ngarage_toggle\nlist_commands\nlist_ffat\nlist_keys\nlist_sd\npurge_addressing\npurge_config\npurge_keys\nrestart\nring_bell\nshow_config\nshow_version\nunlock\nuptime");
 }
 
 // --- Web Functions --- Web Functions --- Web Functions --- Web Functions --- Web Functions --- Web Functions ---
@@ -1939,7 +1937,7 @@ void outputKeys() {
 void restartESPHTTP() {
   webServer.sendHeader("Location", "/",true);  
   webServer.send(302, "text/plain", "");
-  Serial.println("Garage Door toggled HTTP");
+  delay(1000);
   Serial.println("Restarting ESP...");
   Serial.println("\n");
   ESP.restart();
@@ -2000,7 +1998,8 @@ void outputConfig() {
 void displayConfig() {
   sendHTMLHeader();
   siteButtons();
-  pageContent += F("<br/> <textarea readonly>");
+  displayKeys();
+  pageContent += F("<br/> <a href='/'>[Close Panel]</a> <textarea readonly>");
   char buffer[64];
   File dispFile = FFat.open(config_filename);
   while (dispFile.available()) {
@@ -2377,9 +2376,9 @@ void siteButtons() {
   pageContent += F("<br/>");
   //pageContent += F("<a href='/outputConfig'><button>Output config to Serial</button></a>");
   //pageContent += F("<br/>");
-  pageContent += F("<a href='/displayConfig'><button>Display config in page</button></a>");
-  pageContent += F("<br/>");
   pageContent += F("<a href='/configSDtoFFatHTTP'><button>Upload config SD to DL32</button></a>");
+  pageContent += F("<br/>");
+  pageContent += F("<a href='/displayConfig'><button>Display config in page</button></a>");
   pageContent += F("<br/>");
   pageContent += F("<a href='/purgeConfigHTTP'><button>Purge configuration</button></a>");
   pageContent += F("<br/>");
@@ -2391,11 +2390,11 @@ void siteButtons() {
   //pageContent += F("<br/>");
   //pageContent += F("<a href='/outputAddressingHTTP'><button>Output IP addressing to Serial</button></a>");
   //pageContent += F("<br/>");
-  pageContent += F("<a href='/saveAddressingStaticHTTP'><button>Save current addressing as static</button></a>");
-  pageContent += F("<br/>");
   pageContent += F("<a href='/downloadAddressingStaticHTTP'><button>Download static addressing file</button></a>");
   pageContent += F("<br/>");
   pageContent += F("<a href='/addressingStaticSDtoFFatHTTP'><button>Upload static addressing SD to DL32</button></a>");
+  pageContent += F("<br/>");
+  pageContent += F("<a href='/saveAddressingStaticHTTP'><button>Save current addressing as static</button></a>");
   pageContent += F("<br/>");
   pageContent += F("<a href='/purgeAddressingStaticHTTP'><button>Purge static addressing</button></a>");
   pageContent += F("<br/><br/>");
@@ -2412,7 +2411,7 @@ void siteButtons() {
   pageContent += F("<a href='/addKeyModeHTTP'><button>Enter add key mode</button></a>");
   pageContent += F("<br/>");
   pageContent += F("<a href='/purgeKeysHTTP'><button>Purge stored keys</button></a>");
-  pageContent += F("<br/><br/>");
+  pageContent += F("<br/>");
 
   //pageContent += F("<a class='header'>Filesystem Operations</a>");
   //pageContent += F("<a href='/outputFSHTTP'><button>Output FFat Contents to Serial</button></a>");
@@ -2430,6 +2429,11 @@ void siteFooter() {
   pageContent += F("<a class='smalltext'>");
   pageContent += F("IP: ");
   pageContent += (String(ip_addr[0]) + "." + String(ip_addr[1]) + "." + String(ip_addr[2]) + "." + String(ip_addr[3]));
+  if (staticIP) {
+    pageContent += F("<sup>(S)</sup>");
+  } else {
+    pageContent += F("<sup>(D)</sup>");
+  }
   pageContent += F("</a>");
   pageContent += F("&nbsp;&nbsp;&nbsp;&nbsp;");
   pageContent += F("<a class='smalltext'>");
@@ -2437,7 +2441,7 @@ void siteFooter() {
   pageContent += (String(codeVersion));
   pageContent += F("&nbsp;&nbsp;&nbsp;&nbsp;");
   pageContent += F("</a>");
-  pageContent += F("<a class='smalltext' href='https://github.com/Mark-Roly/DL32' target='_blank' rel='noopener noreferrer'>");
+  pageContent += F("<a class='smalltext' href='https://github.com/Mark-Roly/dl32-arduino' target='_blank' rel='noopener noreferrer'>");
   pageContent += F("github");
   pageContent += F("</a>");
   pageContent += F("<br/><br/></div>");

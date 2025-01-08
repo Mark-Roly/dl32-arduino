@@ -1,5 +1,5 @@
 {
-	"wifi_enabled": "false",
+    "wifi_enabled": "false",
     "wifi_ssid": "sample_wifi_ssid",
     "wifi_password": "sample_wifi_pass",
     "mqtt_enabled": "false",
