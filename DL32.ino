@@ -2,7 +2,7 @@
 
   DL32 v3 by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812
-  Last updated 08/01/2025
+  Last updated 28/02/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
     
 */
 
-#define codeVersion 20270108
+#define codeVersion 20250228
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -113,6 +113,7 @@ struct Addressing {
 #define addKeyDur 10
 #define unrecognizedKeyDur 4
 #define WDT_TIMEOUT 60
+#define butMinThresh 80
 
 // Number of neopixels used
 #define NUMPIXELS 1
@@ -1072,6 +1073,11 @@ void garage_toggle() {
     delay(garageDur);
     digitalWrite(lockRelay_pin, LOW);
     setPixBlue();
+  } else if (garage_mode == false) {
+    Serial.println("Unit is not in garage mode.");
+    if (MQTTclient.connected()) {
+      mqttPublish(config.mqtt_stat_topic, "Unit is not in garage mode.");
+    }
   }
   return;
 }
@@ -1134,21 +1140,21 @@ int checkExit() {
   long count = 0;
   if (digitalRead(exitButton_pin) == LOW) {
     while (digitalRead(exitButton_pin) == LOW) {
-      count++;
+      count = count + 10;
       delay(10);
-      if (count > 300) {
+      if (count > 3000) {
         addKeyMode();
         return 0;
       }
     }
-    if (count > 5 && count < 501){
+    if (count > butMinThresh && count < 3001){
       Serial.print("Exit Button pressed");
-      // Serial.print(" for ");
-      // Serial.print(count);
-      // Serial.print(" centiseconds");
+      Serial.print(" for ");
+      Serial.print(count);
+      Serial.print("ms");
       Serial.println("");
       if (MQTTclient.connected()) {
-        String msg_str = ("Exit Button pressed"); // for " + String(count) + " centiseconds");
+        String msg_str = ("Exit Button pressed for " + String(count) + "ms");
         char* msg_char = new char[msg_str.length() + 1];
         msg_str.toCharArray(msg_char, msg_str.length() + 1);
         mqttPublish(config.mqtt_stat_topic, msg_char);
@@ -2185,6 +2191,11 @@ void saveAddressingStaticHTTP() {
   File addressing_file = FFat.open(addressing_filename, FILE_WRITE);
   serializeJsonPretty(addressing_doc, addressing_file);
   addressing_file.close();
+  Serial.println("Done. Restarting...");
+  if (MQTTclient.connected()) {
+    mqttPublish(config.mqtt_stat_topic, "Done. Restarting...");
+  } 
+  ESP.restart();
 }
 
 void downloadAddressingStaticHTTP() {
@@ -2315,7 +2326,7 @@ void siteHeader() {
   pageContent += F("h1 {font-family: Arial, Helvetica, sans-serif; color: #ff3200;}");
   pageContent += F("h3 {font-family: Arial, Helvetica, sans-serif; color: #ff3200;}");
   pageContent += F("a {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: #ff3200;}");
-  pageContent += F("textarea {background-color: #303030; font-size: 11px; width: 300px; height: 150px; resize: vertical; color: #ff3200;}");
+  pageContent += F("textarea {background-color: #303030; font-size: 11px; width: 300px; height: 50px; resize: vertical; color: #ff3200;}");
   pageContent += F("body {background-color: #303030; text-align: center;}");
   pageContent += F("</style>");
   pageContent += F("</head>");
@@ -2390,13 +2401,25 @@ void siteButtons() {
   //pageContent += F("<br/>");
   //pageContent += F("<a href='/outputAddressingHTTP'><button>Output IP addressing to Serial</button></a>");
   //pageContent += F("<br/>");
-  pageContent += F("<a href='/downloadAddressingStaticHTTP'><button>Download static addressing file</button></a>");
+  if (staticIP) {
+    pageContent += F("<a href='/downloadAddressingStaticHTTP'><button>Download static addressing file</button></a>");
+   } else {
+    pageContent += F("<a href='/downloadAddressingStaticHTTP'><button style='background-color: #999999; color: #777777';>Download static addressing file</button></a>");
+   }
   pageContent += F("<br/>");
   pageContent += F("<a href='/addressingStaticSDtoFFatHTTP'><button>Upload static addressing SD to DL32</button></a>");
   pageContent += F("<br/>");
-  pageContent += F("<a href='/saveAddressingStaticHTTP'><button>Save current addressing as static</button></a>");
+  if (staticIP) {
+    pageContent += F("<button style='background-color: #999999; color: #777777';>Save current addressing as static</button>");
+  } else {
+    pageContent += F("<a href='/saveAddressingStaticHTTP'><button>Save current addressing as static</button></a>");
+  }
   pageContent += F("<br/>");
-  pageContent += F("<a href='/purgeAddressingStaticHTTP'><button>Purge static addressing</button></a>");
+  if (staticIP) {
+    pageContent += F("<a href='/purgeAddressingStaticHTTP'><button>Purge static addressing</button></a>");
+  } else {
+    pageContent += F("<a href='/purgeAddressingStaticHTTP'><button style='background-color: #999999; color: #777777';>Purge static addressing</button></a>");
+  }
   pageContent += F("<br/><br/>");
 
   pageContent += F("<a class='header'>Key Management</a>");
@@ -2410,7 +2433,11 @@ void siteButtons() {
   pageContent += F("<br/>");
   pageContent += F("<a href='/addKeyModeHTTP'><button>Enter add key mode</button></a>");
   pageContent += F("<br/>");
-  pageContent += F("<a href='/purgeKeysHTTP'><button>Purge stored keys</button></a>");
+  if (FFat.exists(keys_filename)) {
+    pageContent += F("<a href='/purgeKeysHTTP'><button>Purge stored keys</button></a>");
+  } else {
+    pageContent += F("<a href='/purgeKeysHTTP'><button style='background-color: #999999; color: #777777';>Purge stored keys</button></a>");
+  }
   pageContent += F("<br/>");
 
   //pageContent += F("<a class='header'>Filesystem Operations</a>");
