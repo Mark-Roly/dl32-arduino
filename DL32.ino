@@ -2,7 +2,7 @@
 
   DL32 v3 by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812
-  Last updated 28/02/2025
+  Last updated 07/03/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
     
 */
 
-#define codeVersion 20250228
+#define codeVersion 20250307
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -113,7 +113,7 @@ struct Addressing {
 #define addKeyDur 10
 #define unrecognizedKeyDur 4
 #define WDT_TIMEOUT 60
-#define butMinThresh 80
+#define butMinThresh 120
 
 // Number of neopixels used
 #define NUMPIXELS 1
@@ -145,6 +145,7 @@ boolean doorOpen = true;
 boolean failSecure = true;
 boolean add_mode = false;
 boolean garage_mode = false;
+boolean magSensorPresent = false;
 
 String pageContent = "";
 const char* config_filename = "/dl32.json";
@@ -1257,7 +1258,7 @@ void checkBell() {
 
 //Check magnetic sensor for open/closed door state (Optional)
 void checkMagSensor() {
-  if (doorOpen == true && digitalRead(magSensor_pin) == LOW) {
+  if (doorOpen == true && digitalRead(magSensor_pin) == LOW && magSensorPresent) {
     //send not that door has closed
     doorOpen = false;
     Serial.println("Door Closed");
@@ -1266,7 +1267,7 @@ void checkMagSensor() {
     }
     //Serial.print("doorOpen == ");
     //Serial.println(doorOpen);
-  } else if (doorOpen == false && digitalRead(magSensor_pin) == HIGH) {
+  } else if (doorOpen == false && digitalRead(magSensor_pin) == HIGH && magSensorPresent) {
     doorOpen = true;
     Serial.println("Door Opened");
     if (MQTTclient.connected()) {
