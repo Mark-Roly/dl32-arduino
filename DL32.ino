@@ -2,7 +2,7 @@
 
   DL32 v3 by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812
-  Last updated 07/03/2025
+  Last updated 25/03/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
     
 */
 
-#define codeVersion 20250307
+#define codeVersion 20250325
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -113,7 +113,7 @@ struct Addressing {
 #define addKeyDur 10
 #define unrecognizedKeyDur 4
 #define WDT_TIMEOUT 60
-#define butMinThresh 120
+#define butMinThresh 150
 
 // Number of neopixels used
 #define NUMPIXELS 1
