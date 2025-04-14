@@ -2,7 +2,7 @@
 
   DL32 v3 by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812
-  Last updated 25/03/2025
+  Last updated 10/04/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
     
 */
 
-#define codeVersion 20250325
+#define codeVersion 20250410
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -38,7 +38,6 @@
 #include <WiFi.h>               // WiFi by Ivan Grokhotkov https://github.com/espressif/arduino-esp32/blob/master/libraries/WiFi
 #include <WebServer.h>          // WebServer by Ivan Grokhotkov https://github.com/espressif/arduino-esp32/blob/master/libraries/WebServer
 #include <SPI.h>                // SPI by Hristo Gochkov https://github.com/espressif/arduino-esp32/blob/master/libraries/SPI
-#include <LittleFS.h>           // LittleFS by Espressif https://github.com/espressif/arduino-esp32/blob/master/libraries/LittleFS
 #include <PubSubClient.h>       // PubSubClient by Nick O'leary https://github.com/knolleary/pubsubclient
 #include <Adafruit_NeoPixel.h>  // Adafruit_NeoPixel by Adafruit https://github.com/adafruit/Adafruit_NeoPixel
 #include <Wiegand.h>            // YetAnotherArduinoWiegandLibrary by paula-raca https://github.com/paulo-raca/YetAnotherArduinoWiegandLibrary
@@ -50,6 +49,7 @@
 #include <FS.h>                 // FS by Ivan Grokhotkov https://github.com/espressif/arduino-esp32/blob/master/libraries/FS
 #include <FFat.h>               // FFAT by espressif https://github.com/espressif/arduino-esp32/blob/master/libraries/FFat
 #include <SD.h>                 // SD by espressif https://github.com/espressif/arduino-esp32/blob/master/libraries/SD
+#include <SimpleFTPServer.h>    // SimpleFTPServer by Renzo Mischianti https://mischianti.org/category/my-libraries/simple-ftp-server/
 
 // Hardware Rev 20240812 pins [Since codeVersion 20240819]
 #define buzzer_pin 14
@@ -96,6 +96,11 @@ struct Config {
   char mqtt_auth[8];
   char mqtt_user[32];
   char mqtt_password[32];
+  char magsr_present[8];
+  char ftp_enabled[8];
+  char ftp_port[8];
+  char ftp_user[32];
+  char ftp_password[32];
 };
 
 // Define struct for storing addressing configuration
@@ -145,7 +150,7 @@ boolean doorOpen = true;
 boolean failSecure = true;
 boolean add_mode = false;
 boolean garage_mode = false;
-boolean magSensorPresent = false;
+boolean magsr_present = false;
 
 String pageContent = "";
 const char* config_filename = "/dl32.json";
@@ -171,6 +176,7 @@ WebServer webServer(80);
 PubSubClient MQTTclient(esp32Client);
 Wiegand wiegand;
 Ticker secondTick;
+FtpServer ftpSrv;
 
 // --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions ---
 void ISRwatchdog() {
@@ -708,13 +714,18 @@ void loadFSJSON_config(const char* config_filename, Config& config) {
   strlcpy(config.mqtt_auth, config_doc["mqtt_auth"] | "true", sizeof(config.mqtt_auth));
   strlcpy(config.mqtt_user, config_doc["mqtt_user"] | "mqtt", sizeof(config.mqtt_user));
   strlcpy(config.mqtt_password, config_doc["mqtt_password"] | "null_mqtt_pass", sizeof(config.mqtt_password));
+  strlcpy(config.magsr_present, config_doc["magsr_present"] | "false", sizeof(config.magsr_present));
+  strlcpy(config.ftp_enabled, config_doc["ftp_enabled"] | "false", sizeof(config.ftp_enabled));
+  strlcpy(config.ftp_port, config_doc["ftp_port"] | "21", sizeof(config.ftp_port));
+  strlcpy(config.ftp_user, config_doc["ftp_user"] | "null_ftp_user", sizeof(config.ftp_user));
+  strlcpy(config.ftp_password, config_doc["ftp_password"] | "null_ftp_pass", sizeof(config.ftp_password));
   config_file.close();
 }
 
 // Loads the addressing from a file
 void loadFSJSON_addressing(const char* addressing_filename, Addressing& addressing) {
   if (FFat.exists(addressing_filename) == false) {
-    Serial.println("No static addressing file found - Using dynamic addressing");
+    Serial.println("no static addressing file found - Using dynamic addressing");
     return;
   }
   // Open file for reading
@@ -935,7 +946,7 @@ void addKeyMode() {
 
 // --- Neopixel Functions --- Neopixel Functions --- Neopixel Functions --- Neopixel Functions --- Neopixel Functions --- Neopixel Functions ---
 
-//Onboard pixel uses G,R,B
+// NOTE: Onboard pixel uses G,R,B
 
 void setPixRed() {
   pixel.setPixelColor(0, pixel.Color(0,25,0));
@@ -1236,6 +1247,7 @@ void checkAUX() {
       Serial.println("Factory resetting device... ");
       deleteFile(FFat, keys_filename);
       deleteFile(FFat, config_filename);
+      deleteFile(FFat, addressing_filename);
       Serial.println("Factory reset complete. Restarting.");
       ESP.restart();
       delay(3000);
@@ -1258,7 +1270,7 @@ void checkBell() {
 
 //Check magnetic sensor for open/closed door state (Optional)
 void checkMagSensor() {
-  if (doorOpen == true && digitalRead(magSensor_pin) == LOW && magSensorPresent) {
+  if (doorOpen == true && digitalRead(magSensor_pin) == LOW && magsr_present) {
     //send not that door has closed
     doorOpen = false;
     Serial.println("Door Closed");
@@ -1267,7 +1279,7 @@ void checkMagSensor() {
     }
     //Serial.print("doorOpen == ");
     //Serial.println(doorOpen);
-  } else if (doorOpen == false && digitalRead(magSensor_pin) == HIGH && magSensorPresent) {
+  } else if (doorOpen == false && digitalRead(magSensor_pin) == HIGH && magsr_present) {
     doorOpen = true;
     Serial.println("Door Opened");
     if (MQTTclient.connected()) {
@@ -1867,6 +1879,43 @@ void listCmnds() {
   }
   Serial.printf("add_key_mode\ncopy_config_sd_to_ffat\ncopy_keys_sd_to_ffat\ngarage_close\ngarage_open\ngarage_toggle\nlist_commands\nlist_ffat\nlist_keys\nlist_sd\npurge_addressing\npurge_config\npurge_keys\nrestart\nring_bell\nshow_config\nshow_version\nunlock\nuptime");
 }
+
+// --- FTP Functions --- FTP Functions --- FTP Functions --- FTP Functions --- FTP Functions --- FTP Functions ---
+
+void _callback(FtpOperation ftpOperation, unsigned int freeSpace, unsigned int totalSpace){
+  switch (ftpOperation) {
+    case FTP_CONNECT:
+      Serial.println(F("FTP client connected"));
+      break;
+    case FTP_DISCONNECT:
+      Serial.println(F("FTP client disconnected"));
+      break;
+    case FTP_FREE_SPACE_CHANGE:
+      Serial.printf("FTP change in free space, free %u of %u\n", freeSpace, totalSpace);
+      break;
+    default:
+      break;
+  }
+};
+
+void _transferCallback(FtpTransferOperation ftpOperation, const char* name, unsigned int transferredSize){
+  switch (ftpOperation) {
+    case FTP_UPLOAD_START:
+      Serial.println(F("FTP upload started"));
+      break;
+    case FTP_UPLOAD:
+      Serial.printf("FTP upload of file %s bytes %u\n", name, transferredSize);
+      break;
+    case FTP_TRANSFER_STOP:
+      Serial.println(F("FTP transfer completed"));
+      break;
+    case FTP_TRANSFER_ERROR:
+      Serial.println(F("FTP transfer error"));
+      break;
+    default:
+      break;
+  }
+};
 
 // --- Web Functions --- Web Functions --- Web Functions --- Web Functions --- Web Functions --- Web Functions ---
 
@@ -2480,6 +2529,14 @@ void echoUri() {
   webServer.send(200, "text//plain", webServer.uri() );
 }
 
+void startFTPServer() {
+  ftpSrv.begin(config.ftp_user, config.ftp_password);
+  Serial.print("FTP Server started at ");
+  Serial.print(WiFi.localIP());
+  Serial.print(" on port ");
+  Serial.println(config.ftp_port);
+}
+
 void startWebServer() {
   webServer.on("/downloadKeysHTTP", downloadKeysHTTP);
   webServer.on("/outputKeys", outputKeys);
@@ -2588,7 +2645,7 @@ void setup() {
   Serial.println("Loading configuration...");
   loadFSJSON_config(config_filename, config);
 
-  Serial.print("Loading addressing...");
+  Serial.print("Loading addressing... ");
   loadFSJSON_addressing(addressing_filename, addressing);
 
   // Check Dip Switch states
@@ -2616,16 +2673,25 @@ void setup() {
     Serial.println(" - Forced offline mode");
     forceOffline = true;
   }
+  if (strcmp(config.magsr_present, "true") == 0) {
+    Serial.print("Magnetic sensor present");
+    Serial.println(" - Door state sensor enabled");
+    magsr_present = true;
+  }
 
   if (failSecure) {
     digitalWrite(lockRelay_pin, LOW);
   } else {
     digitalWrite(lockRelay_pin, HIGH);
   }
-
   if (forceOffline == false) {
     connectWifi();
     startWebServer();
+    ftpSrv.setCallback(_callback);
+    ftpSrv.setTransferCallback(_transferCallback);
+    if (strcmp(config.ftp_enabled, "true") == 0) {
+      startFTPServer();
+    }
     if (strcmp(config.mqtt_enabled, "true") == 0) {
       Serial.print("Attempting connection to MQTT broker ");
       Serial.print(config.mqtt_server);
@@ -2635,9 +2701,7 @@ void setup() {
   } else {
     Serial.println("Running in offline mode.");
   }
-    
   pixel.begin();
-
   // instantiate listeners and initialize Wiegand reader, configure pins
   wiegand.onReceive(receivedData, "Key read: ");
   wiegand.onReceiveError(receivedDataError, "Key read error: ");
@@ -2661,6 +2725,7 @@ void loop() {
       }
       //Online Functions
       webServer.handleClient();
+      ftpSrv.handleFTP();
       ElegantOTA.loop();
       if (strcmp(config.mqtt_enabled, "true") == 0) {
         maintainConnnectionMQTT();
