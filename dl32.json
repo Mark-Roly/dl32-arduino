@@ -1,21 +1,27 @@
 // Configuration file for DL32-S3
 // https://github.com/Mark-Roly/dl32-arduino
-// Minimum firmware revision 20250514
+// Minimum firmware revision 20250424
 {
-    "wifi_enabled": "false",           // Wifi connection enabled. Default is "false"
-    "wifi_ssid": "MyWifi",             // Wifi SSID name
-    "wifi_password": "MyWifiPassword", // Wifi password
-    "mqtt_enabled": "false",           // MQTT client enabled. Default is "false"
-    "mqtt_server": "192.168.1.123",    // MQTT broker address. can be IP address or FQDN
-    "mqtt_port": "1883",               // MQTT broker TCP port. Default is "1883"
-    "mqtt_topic": "DL32",              // MQTT topic base. Default is "DEFAULT_dl32s3"
-    "mqtt_client_name": "DL32",        // MQTT client name. Default is "DEFAULT_dl32s3"
-    "mqtt_auth": "false",              // MQTT authentication required. Default is "true"
-    "mqtt_user": "MqttUsr",            // Username used for MQTT authentication
-    "mqtt_password": "MqttPass",       // Username used for MQTT authentication
-    "magsr_present": "false",          // Magnetic door sensor enabled. Default is "false"
-    "ftp_enabled": "false",            // FTP server enabled. Default is "false"
-    "ftp_user": "FtpUser",             // Username used for FTP authentication. Default is "user"
-    "ftp_password": "FtpPass",         // Password used for FTP authentication. Default is "password"
-    "ftp_port": "21"                   // TCP port used for FTP service. Default is "21"
+    "wifi_enabled": false,
+    "wifi_ssid": "wifissid",
+    "wifi_password": "wifipass",
+    "mqtt_enabled": false,
+    "mqtt_server": "192.168.1.123",
+    "mqtt_topic": "DL32",
+    "mqtt_client_name": "DL32",
+    "mqtt_auth": false,
+    "mqtt_user": "mqttuser",
+    "mqtt_password": "mqttpass",
+    "ftp_enabled": false,
+    "ftp_user": "ftpuser",
+    "ftp_password": "ftppass",
+    "exitUnlockDur_S": 5,
+    "httpUnlockDur_S": 5,
+    "keyUnlockDur_S": 5,
+    "cmndUnlockDur_S": 5,
+    "badKeyLockoutDur_S": 2,
+    "exitButMinThresh_Ms": 50,
+    "keyWaitDur_Ms": 1500,
+    "garageMomentaryDur_Ms": 500,
+    "addKeyTimeoutDur_S": 10
 }

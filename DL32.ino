@@ -1,8 +1,8 @@
 /*
 
-  DL32 v3 by Mark Booth
-  For use with Wemos S3 and DL32 S3 hardware rev 20240812
-  Last updated 10/04/2025
+  DL32 Aduino by Mark Booth
+  For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
+  Last updated 24/04/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
     
 */
 
-#define codeVersion 20250410
+#define codeVersion 20250424
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -72,6 +72,7 @@
 #define GH04 13
 #define GH05 8
 #define GH06 11
+#define IO0 0
 #define SD_CS_PIN 34
 #define SD_CLK_PIN 38
 #define SD_MOSI_PIN 36
@@ -80,12 +81,12 @@
 
 // Define struct for storing configuration
 struct Config {
-  char wifi_enabled[8];
+  bool wifi_enabled;
   char wifi_ssid[32];
   char wifi_password[32];
-  char mqtt_enabled[8];
+  bool mqtt_enabled;
   char mqtt_server[32];
-  char mqtt_port[8];
+  int mqtt_port;
   char mqtt_topic[32];
   char mqtt_cmnd_topic[32];
   char mqtt_stat_topic[32];
@@ -93,14 +94,23 @@ struct Config {
   char mqtt_addr_topic[32];
   char mqtt_uptm_topic[32];
   char mqtt_client_name[32];
-  char mqtt_auth[8];
+  bool mqtt_auth;
   char mqtt_user[32];
   char mqtt_password[32];
-  char magsr_present[8];
-  char ftp_enabled[8];
-  char ftp_port[8];
+  bool magsr_present;
+  bool ftp_enabled;
+  int ftp_port;
   char ftp_user[32];
   char ftp_password[32];
+  int exitUnlockDur_S;
+  int httpUnlockDur_S;
+  int keyUnlockDur_S;
+  int cmndUnlockDur_S;
+  int badKeyLockoutDur_S;
+  int exitButMinThresh_Ms;
+  int keyWaitDur_Ms;
+  int garageMomentaryDur_Ms;
+  int addKeyTimeoutDur_S;
 };
 
 // Define struct for storing addressing configuration
@@ -110,15 +120,7 @@ struct Addressing {
   char gatewayIP[16];
 };
 
-#define exitButDur 5
-#define httpDur 5
-#define keypadDur 15 //tenths-of-seconds
-#define keyDur 5
-#define garageDur 500
-#define addKeyDur 10
-#define unrecognizedKeyDur 4
-#define WDT_TIMEOUT 60
-#define butMinThresh 150
+#define WDT_TIMEOUT_S 60
 
 // Number of neopixels used
 #define NUMPIXELS 1
@@ -173,15 +175,16 @@ Config config;
 Addressing addressing;
 WiFiClient esp32Client;
 WebServer webServer(80);
-PubSubClient MQTTclient(esp32Client);
 Wiegand wiegand;
 Ticker secondTick;
 FtpServer ftpSrv;
+PubSubClient MQTTclient(esp32Client);
 
 // --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions ---
+
 void ISRwatchdog() {
   watchdogCount++;
-  if (watchdogCount == WDT_TIMEOUT) {
+  if (watchdogCount == WDT_TIMEOUT_S) {
     Serial.println("Watchdog invoked!");
     ESP.restart();
   }
@@ -412,7 +415,7 @@ void checkKey() {
     Serial.println("Keypad entry...");
     keypadBuffer += scannedKey.substring(1);
     scannedKey = "";
-    while ((keypadCounter < keypadDur) && (keypadBuffer.length() < 12)) {
+    while ((keypadCounter < (config.keyWaitDur_Ms/100)) && (keypadBuffer.length() < 12)) {
       noInterrupts();
       wiegand.flush();
       interrupts();
@@ -423,7 +426,7 @@ void checkKey() {
         keypadCounter = 0;
         //If the key pressed is 0B (#/ENT, then exit the loop of waiting for input
         if (scannedKey == "0B") {
-          keypadCounter = keypadDur;
+          keypadCounter = (config.keyWaitDur_Ms/100);
         } else if (scannedKey == "0A") {
           Serial.println("Cancelling keypad input");
           add_mode = false;
@@ -468,7 +471,7 @@ void checkKey() {
     Serial.print("Key ");
     Serial.print(scannedKey);
     Serial.println(" is authorized!");
-    unlock(keyDur);
+    unlock(config.keyUnlockDur_S);
   } else {
     add_mode = false;
     Serial.print("Key ");
@@ -476,7 +479,7 @@ void checkKey() {
     Serial.println(" is unauthorized!");
     setPixRed();
     playUnauthorizedTone();
-    delay(unrecognizedKeyDur*1000);
+    delay(config.badKeyLockoutDur_S*1000);
     setPixBlue();
   }
   scannedKey = "";
@@ -500,7 +503,7 @@ void stateChanged(bool plugged, const char* message) {
 void receivedData(uint8_t* data, uint8_t bits, const char* message) {
   String key = "";
   String key_buff = "";
-  add_count = (addKeyDur * 100);
+  add_count = (config.addKeyTimeoutDur_S * 100);
   //Print value in HEX
   uint8_t bytes = (bits+7)/8;
   for (int i=0; i<bytes; i++) {
@@ -541,7 +544,6 @@ void sd_setup() {
   Serial.println("SD filesystem successfully mounted");
   SD_mounted = true;
 }
-
 
 void checkSDPresent(int verbose) {
   if ((SD_present == false) && (digitalRead(SD_CD_PIN) == LOW)) {
@@ -692,13 +694,17 @@ void loadFSJSON_config(const char* config_filename, Config& config) {
   DeserializationError error = deserializeJson(config_doc, config_file);
   if (error) {
     Serial.println(F("Failed to read configuration file, using default configuration"));
+  } else {
+    Serial.print("Found file ");
+    Serial.print(config_filename);
+    Serial.println(" - loading parameters...");
   }
-  strlcpy(config.wifi_enabled, config_doc["wifi_enabled"] | "false", sizeof(config.wifi_enabled));
+  config.wifi_enabled = config_doc["wifi_enabled"] | false;
   strlcpy(config.wifi_ssid, config_doc["wifi_ssid"] | "null_wifi_ssid", sizeof(config.wifi_ssid));
   strlcpy(config.wifi_password, config_doc["wifi_password"] | "null_wifi_pass", sizeof(config.wifi_password));
-  strlcpy(config.mqtt_enabled, config_doc["mqtt_enabled"] | "false", sizeof(config.mqtt_enabled));
+  config.mqtt_enabled = config_doc["mqtt_enabled"] | false;
   strlcpy(config.mqtt_server, config_doc["mqtt_server"] | "null_mqtt_server", sizeof(config.mqtt_server));
-  strlcpy(config.mqtt_port, config_doc["mqtt_port"] | "1883", sizeof(config.mqtt_port));
+  config.mqtt_port = config_doc["mqtt_port"] | 1883;
   strlcpy(config.mqtt_topic, config_doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_topic));
   strlcpy(config.mqtt_stat_topic, config_doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_stat_topic));
   strlcpy(config.mqtt_cmnd_topic, config_doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_cmnd_topic));
@@ -711,21 +717,30 @@ void loadFSJSON_config(const char* config_filename, Config& config) {
   strcat(config.mqtt_addr_topic, "/addr");
   strcat(config.mqtt_uptm_topic, "/uptm");
   strlcpy(config.mqtt_client_name, config_doc["mqtt_client_name"] | "DEFAULT_dl32s3", sizeof(config.mqtt_client_name));
-  strlcpy(config.mqtt_auth, config_doc["mqtt_auth"] | "true", sizeof(config.mqtt_auth));
+  config.mqtt_auth = config_doc["mqtt_auth"] | false;
   strlcpy(config.mqtt_user, config_doc["mqtt_user"] | "mqtt", sizeof(config.mqtt_user));
   strlcpy(config.mqtt_password, config_doc["mqtt_password"] | "null_mqtt_pass", sizeof(config.mqtt_password));
-  strlcpy(config.magsr_present, config_doc["magsr_present"] | "false", sizeof(config.magsr_present));
-  strlcpy(config.ftp_enabled, config_doc["ftp_enabled"] | "false", sizeof(config.ftp_enabled));
-  strlcpy(config.ftp_port, config_doc["ftp_port"] | "21", sizeof(config.ftp_port));
+  config.magsr_present = config_doc["magsr_present"] | false;
+  config.ftp_enabled = config_doc["ftp_enabled"] | false;
+  config.ftp_port = 21;
   strlcpy(config.ftp_user, config_doc["ftp_user"] | "null_ftp_user", sizeof(config.ftp_user));
   strlcpy(config.ftp_password, config_doc["ftp_password"] | "null_ftp_pass", sizeof(config.ftp_password));
+  config.exitUnlockDur_S = config_doc["exitUnlockDur_S"] | 5;
+  config.httpUnlockDur_S = config_doc["httpUnlockDur_S"] | 5;
+  config.keyUnlockDur_S = config_doc["keyUnlockDur_S"] | 5;
+  config.cmndUnlockDur_S = config_doc["cmndUnlockDur_S"] | 5;
+  config.badKeyLockoutDur_S = config_doc["badKeyLockoutDur_S"] | 5;
+  config.exitButMinThresh_Ms = config_doc["exitButMinThresh_Ms"] | 50;
+  config.keyWaitDur_Ms = config_doc["keyWaitDur_Ms"] | 1500;
+  config.garageMomentaryDur_Ms = config_doc["garageMomentaryDur_Ms"] | 500;
+  config.addKeyTimeoutDur_S = config_doc["addKeyTimeoutDur_S"] | 10;
   config_file.close();
 }
 
 // Loads the addressing from a file
 void loadFSJSON_addressing(const char* addressing_filename, Addressing& addressing) {
   if (FFat.exists(addressing_filename) == false) {
-    Serial.println("no static addressing file found - Using dynamic addressing");
+    Serial.println("no static file, using dynamic addressing");
     return;
   }
   // Open file for reading
@@ -738,7 +753,6 @@ void loadFSJSON_addressing(const char* addressing_filename, Addressing& addressi
 
   // Deserialize the JSON document
   DeserializationError error = deserializeJson(addressing_doc, addressing_file);
-
   if (error) {
     Serial.print("Failed to read addressing file: ");
       switch (error.code()) {
@@ -790,6 +804,26 @@ boolean configSDtoFFat() {
   return true;
 }
 
+void configFFattoSD() {
+  if ((SD_present == true) && (FFat.exists(config_filename))){
+    File sourceFile = FFat.open(config_filename);
+    File destFile = SD.open(config_filename, FILE_WRITE);
+    static uint8_t buf[1];
+    while ( sourceFile.read( buf, 1) ) {
+      destFile.write( buf, 1 );
+    }
+    destFile.close();
+    sourceFile.close();
+    playSuccessTone();
+    Serial.println("Config file successfuly copied from FFat to SD");
+  } else {
+    playUnauthorizedTone();
+    Serial.println("");
+    Serial.println("No SD Card Mounted or no such file");
+    return;
+  }
+}
+
 void addressingSDtoFFat() {
   if ((SD_present == true) && (SD.exists(addressing_filename))) {
     File sourceFile = SD.open(addressing_filename);
@@ -801,6 +835,7 @@ void addressingSDtoFFat() {
     destFile.close();
     sourceFile.close();
   } else {
+    playUnauthorizedTone();
     Serial.println("");
     Serial.println("No SD Card Mounted or no such file");
     return;
@@ -808,9 +843,9 @@ void addressingSDtoFFat() {
   Serial.println("Addressing file successfuly copied from SD to FFat");
   ESP.restart();
 }
-
 boolean allSDtoFFat() {
   int copiedFileCount = 0;
+  delay(100);
   if ((SD_present == true) && (SD.exists(config_filename))) {
     File sourceFile = SD.open(config_filename);
     File destFile = FFat.open(config_filename, FILE_WRITE);
@@ -865,8 +900,7 @@ boolean allSDtoFFat() {
     playUnauthorizedTone();
     Serial.println("No SD Card Mounted or no valid files");
     return false;
-  }
-  
+  } 
 }
 
 void keysSDtoFFat() {
@@ -889,7 +923,7 @@ void keysSDtoFFat() {
   playSuccessTone();
 }
 
-void keysFStoSD() {
+void keysFFattoSD() {
   if ((SD_present == true) && (FFat.exists(keys_filename))){
     File sourceFile = FFat.open(keys_filename);
     File destFile = SD.open(keys_filename, FILE_WRITE);
@@ -902,10 +936,11 @@ void keysFStoSD() {
     Serial.println("Keys file successfuly copied from FFat to SD");
   } else {
     Serial.println("");
+    playUnauthorizedTone();
     Serial.println("No SD Card Mounted or no such file");
     return;
   }
-  ESP.restart();
+  playSuccessTone();
 }
 
 void addKeyMode() {
@@ -914,12 +949,11 @@ void addKeyMode() {
     Serial.println("Add Key mode - Waiting for key");
   add_count = 0;
   add_mode = true;
-  while (add_count < (addKeyDur * 100) && add_mode) {
+  while (add_count < (config.addKeyTimeoutDur_S * 100) && add_mode) {
     noInterrupts();
     wiegand.flush();
     interrupts();
-    if (add_count % 100 == 0) {
-      //playBipTone();
+    if (add_count % 100 == 0 && (digitalRead(DS03) == HIGH)) {
       playGeigerTone();
     }
     if (Serial.available()) {
@@ -1020,7 +1054,7 @@ int connectWifi() {
   }
   Serial.print("\nSuccessfully connected to SSID ");
   Serial.println(config.wifi_ssid);
-  if (strcmp(config.mqtt_enabled, "true") == 0) {
+  if (config.mqtt_enabled) {
     startMQTTConnection();
   }
   return 0;
@@ -1039,7 +1073,7 @@ void unlock(int secs) {
     setPixGreen();
     digitalWrite(lockRelay_pin, HIGH);
     playUnlockTone();
-    delay(garageDur);
+    delay(config.garageMomentaryDur_Ms);
     digitalWrite(lockRelay_pin, LOW);
     setPixBlue();
   return;
@@ -1082,7 +1116,7 @@ void garage_toggle() {
     setPixGreen();
     digitalWrite(lockRelay_pin, HIGH);
     playUnlockTone();
-    delay(garageDur);
+    delay(config.garageMomentaryDur_Ms);
     digitalWrite(lockRelay_pin, LOW);
     setPixBlue();
   } else if (garage_mode == false) {
@@ -1103,7 +1137,7 @@ void garage_open() {
     setPixGreen();
     digitalWrite(lockRelay_pin, HIGH);
     playUnlockTone();
-    delay(garageDur);
+    delay(config.garageMomentaryDur_Ms);
     digitalWrite(lockRelay_pin, LOW);
     setPixBlue();
   } else if  (garage_mode && (doorOpen)) {
@@ -1129,7 +1163,7 @@ void garage_close() {
     setPixGreen();
     digitalWrite(lockRelay_pin, HIGH);
     playUnlockTone();
-    delay(garageDur);
+    delay(config.garageMomentaryDur_Ms);
     digitalWrite(lockRelay_pin, LOW);
     setPixBlue();
   } else if  (garage_mode && (doorOpen == false)) {
@@ -1159,7 +1193,7 @@ int checkExit() {
         return 0;
       }
     }
-    if (count > butMinThresh && count < 3001){
+    if (count > config.exitButMinThresh_Ms && count < 3001){
       Serial.print("Exit Button pressed");
       Serial.print(" for ");
       Serial.print(count);
@@ -1171,7 +1205,37 @@ int checkExit() {
         msg_str.toCharArray(msg_char, msg_str.length() + 1);
         mqttPublish(config.mqtt_stat_topic, msg_char);
       }
-      unlock(exitButDur);
+      unlock(config.exitUnlockDur_S);
+      return 0;
+    }
+  }
+  return 0;
+}
+
+int check0() {
+  long count = 0;
+  if (digitalRead(IO0) == LOW) {
+    while (digitalRead(IO0) == LOW) {
+      count = count + 10;
+      delay(10);
+      if (count > 3000) {
+        addKeyMode();
+        return 0;
+      }
+    }
+    if (count > config.exitButMinThresh_Ms && count < 3001){
+      Serial.print("IO0 pressed");
+      Serial.print(" for ");
+      Serial.print(count);
+      Serial.print("ms");
+      Serial.println("");
+      if (MQTTclient.connected()) {
+        String msg_str = ("IO0 pressed for " + String(count) + "ms");
+        char* msg_char = new char[msg_str.length() + 1];
+        msg_str.toCharArray(msg_char, msg_str.length() + 1);
+        mqttPublish(config.mqtt_stat_topic, msg_char);
+      }
+      unlock(config.exitUnlockDur_S);
       return 0;
     }
   }
@@ -1220,7 +1284,7 @@ void checkAUX() {
     }
     if (count > 999) {
       setPixAmber();
-      Serial.println("Release button now to wipe authorized keys list.)");
+      Serial.println("Release button now to wipe authorized keys list.");
       playPurgeTone();
     }
     while (digitalRead(AUXButton_pin) == LOW && (count < 1500)) {
@@ -1229,19 +1293,21 @@ void checkAUX() {
     }
     if (count > 1499) {
       setPixRed();
-      Serial.println("Release button now to perform factory reset.)");
+      Serial.println("Release button now to perform factory reset.");
       playFactoryTone();
     }
-    
+    while (digitalRead(AUXButton_pin) == LOW) {
+      delay(10);
+    }
     if ((count > 499)&&(count < 1000)) {
       Serial.println("Uploading config, addressing and key files from SD card to FFat...");
       delay(1000);
       allSDtoFFat();
       delay(1000);
     } else if ((count > 999)&&(count < 1500)) {
-      Serial.println("Purging stored keys... ");
+      Serial.print("Purging stored keys... ");
       deleteFile(FFat, keys_filename);
-      Serial.println("Keys purged!");
+      Serial.println("Done");
       delay(1000);
     } else if (count > 1499) {
       Serial.println("Factory resetting device... ");
@@ -1385,7 +1451,10 @@ void playSuccessTone() {
 }
 
 void ringBell() {
-  playGreensleves();
+  if (digitalRead(DS03) == HIGH) {
+    Serial.println("Ringing Bell");
+    playRandomTone();
+  }
 }
 
 //todo - not working, fix later
@@ -1424,12 +1493,25 @@ boolean playSeq(int noteBeg, note_t note, int octave, int dur) {
 }
 
 void playTwinkle() {
-  seqTmr = 0;
-  playSeq(0,NOTE_C,5,26);
-  playSeq(4,NOTE_C,5,26);
-  playSeq(8,NOTE_G,5,26);
-  playSeq(12,NOTE_G,5,26);
-  playSeq(16,NOTE_A,5,26);
+  if (digitalRead(DS03) == HIGH) {
+    seqTmr = 0;
+    playSeq(0,NOTE_C,5,26);
+    playSeq(4,NOTE_C,5,26);
+    playSeq(8,NOTE_G,5,26);
+    playSeq(12,NOTE_G,5,26);
+    playSeq(16,NOTE_A,5,26);
+  }
+}
+
+void playTwinkleDown() {
+  if (digitalRead(DS03) == HIGH) {
+    seqTmr = 0;
+    playSeq(16,NOTE_A,5,26);
+    playSeq(12,NOTE_G,5,26);
+    playSeq(8,NOTE_G,5,26);
+    playSeq(4,NOTE_C,5,26);
+    playSeq(0,NOTE_C,5,26); 
+  }
 }
 
 void playBowserTheme() {
@@ -1668,12 +1750,14 @@ void playGreensleves() {
 }
 
 void playGeigerTone() {
-  ledcWrite(buzzer_pin, 0);
-  for (int i=1; i<20; i++) {
-    ledcWriteTone(buzzer_pin, i * 100);
-    delay(10);    
+  if (digitalRead(DS03) == HIGH) {
+    ledcWrite(buzzer_pin, 0);
+    for (int i=1; i<20; i++) {
+      ledcWriteTone(buzzer_pin, i * 100);
+      delay(10);    
+    }
+    ledcWrite(buzzer_pin, 0);
   }
-  ledcWrite(buzzer_pin, 0);
 }
 
 void playRandomTone() {
@@ -1697,7 +1781,7 @@ void playRandomTone() {
 // --- MQTT Functions --- MQTT Functions --- MQTT Functions --- MQTT Functions --- MQTT Functions --- MQTT Functions ---
 
 void startMQTTConnection() {
-  MQTTclient.setServer(config.mqtt_server, String(config.mqtt_port).toInt());
+  MQTTclient.setServer(config.mqtt_server, config.mqtt_port);
   MQTTclient.setCallback(MQTTcallback);
   delay(100);
   if (MQTTclient.connected()) {
@@ -1733,13 +1817,15 @@ void maintainConnnectionMQTT() {
 }
 
 boolean mqttConnect() {
-  if ((!strcmp(config.mqtt_enabled, "true") == 0 || (WiFi.status() != WL_CONNECTED))) {
+  if (!(config.mqtt_enabled) || (WiFi.status() != WL_CONNECTED)) {
     return false;
   }
-  if (strcmp(config.mqtt_auth, "true") == 0) {
+  if (config.mqtt_auth) {
     if (MQTTclient.connect(config.mqtt_client_name, config.mqtt_user, config.mqtt_password)) {
       Serial.print("Connected to MQTT broker ");
       Serial.print(config.mqtt_server);
+      Serial.print(" on port ");
+      Serial.print(config.mqtt_port);
       Serial.print(" as ");
       Serial.println(config.mqtt_client_name);
       mqttPublish(config.mqtt_stat_topic, "Connected to MQTT Broker");
@@ -1850,7 +1936,7 @@ boolean executeCommand(String command) {
     Serial.println("Restarting device...");
     ESP.restart();
   } else if (command.equals("unlock")) {
-    unlock(5);
+    unlock(config.cmndUnlockDur_S);
   } else if (command.equals("uptime")) {
     publishUptime();
     printUptime();
@@ -2055,7 +2141,7 @@ void displayConfig() {
   sendHTMLHeader();
   siteButtons();
   displayKeys();
-  pageContent += F("<br/> <a href='/'>[Close Panel]</a> <textarea readonly>");
+  pageContent += F("<br/> <a href='/'>[Close Panel]</a> <textarea style='height:300px;'' readonly>");
   char buffer[64];
   File dispFile = FFat.open(config_filename);
   while (dispFile.available()) {
@@ -2088,7 +2174,7 @@ void unlockHTTP() {
   if (MQTTclient.connected()) {
     mqttPublish(config.mqtt_stat_topic, "HTTP Unlock");
   }  
-  unlock(httpDur);
+  unlock(config.httpUnlockDur_S);
 }
 
 void garageToggleHTTP() {
@@ -2129,7 +2215,18 @@ void configSDtoFFatHTTP() {
   configSDtoFFat();
   sendHTMLHeader();
   siteButtons();
-  pageContent += F("<br/> <textarea readonly>Copied configuration from SD to FFat</textarea>");
+  displayKeys();
+  siteModes();
+  siteFooter();
+  sendHTMLContent();
+  sendHTMLStop();
+}
+
+void configFFattoSDHTTP() {
+  configFFattoSD();
+  sendHTMLHeader();
+  siteButtons();
+  displayKeys();
   siteModes();
   siteFooter();
   sendHTMLContent();
@@ -2140,6 +2237,12 @@ void keysSDtoFFatHTTP() {
   webServer.sendHeader("Location", "/",true);  
   webServer.send(302, "text/plain", "");
   keysSDtoFFat();
+}
+
+void keysFFattoSDHTTP() {
+  webServer.sendHeader("Location", "/",true);  
+  webServer.send(302, "text/plain", "");
+  keysFFattoSD();
 }
 
 void purgeKeysHTTP() {
@@ -2267,7 +2370,7 @@ void addressingStaticSDtoFFatHTTP() {
   addressingSDtoFFat();
   sendHTMLHeader();
   siteButtons();
-  pageContent += F("<br/> <textarea readonly>Copied static addressing from SD to FFat</textarea>");
+  displayKeys();
   siteModes();
   siteFooter();
   sendHTMLContent();
@@ -2277,10 +2380,11 @@ void addressingStaticSDtoFFatHTTP() {
 void purgeAddressingStaticHTTP() {
   webServer.sendHeader("Location", "/",true);  
   webServer.send(302, "text/plain", "");
+  deleteFile(FFat, addressing_filename);
   Serial.println("Static addressing file purged");
   if (MQTTclient.connected()) {
     mqttPublish(config.mqtt_stat_topic, "Static addressing file purged");
-  }  
+  }
   deleteFile(FFat, addressing_filename);
 }
 
@@ -2439,6 +2543,8 @@ void siteButtons() {
   //pageContent += F("<br/>");
   pageContent += F("<a href='/configSDtoFFatHTTP'><button>Upload config SD to DL32</button></a>");
   pageContent += F("<br/>");
+  pageContent += F("<a href='/configFFattoSDHTTP'><button>Download config DL32 to SD</button></a>");
+  pageContent += F("<br/>");
   pageContent += F("<a href='/displayConfig'><button>Display config in page</button></a>");
   pageContent += F("<br/>");
   pageContent += F("<a href='/purgeConfigHTTP'><button>Purge configuration</button></a>");
@@ -2453,25 +2559,19 @@ void siteButtons() {
   //pageContent += F("<br/>");
   if (staticIP) {
     pageContent += F("<a href='/downloadAddressingStaticHTTP'><button>Download static addressing file</button></a>");
-   } else {
-    pageContent += F("<a href='/downloadAddressingStaticHTTP'><button style='background-color: #999999; color: #777777';>Download static addressing file</button></a>");
-   }
-  pageContent += F("<br/>");
+    pageContent += F("<br/>");
+  }
   pageContent += F("<a href='/addressingStaticSDtoFFatHTTP'><button>Upload static addressing SD to DL32</button></a>");
   pageContent += F("<br/>");
-  if (staticIP) {
-    pageContent += F("<button style='background-color: #999999; color: #777777';>Save current addressing as static</button>");
-  } else {
+  if (staticIP == false) {
     pageContent += F("<a href='/saveAddressingStaticHTTP'><button>Save current addressing as static</button></a>");
+    pageContent += F("<br/>");
   }
-  pageContent += F("<br/>");
   if (staticIP) {
     pageContent += F("<a href='/purgeAddressingStaticHTTP'><button>Purge static addressing</button></a>");
-  } else {
-    pageContent += F("<a href='/purgeAddressingStaticHTTP'><button style='background-color: #999999; color: #777777';>Purge static addressing</button></a>");
+    pageContent += F("<br/>");
   }
-  pageContent += F("<br/><br/>");
-
+  pageContent += F("<br/>");
   pageContent += F("<a class='header'>Key Management</a>");
   pageContent += F("<a href='/downloadKeysHTTP'><button>Download key file</button></a>");
   pageContent += F("<br/>");
@@ -2480,6 +2580,8 @@ void siteButtons() {
   //pageContent += F("<a href='/displayKeys'><button>Display keys in page</button></a>");
   //pageContent += F("<br/>");
   pageContent += F("<a href='/keysSDtoFFatHTTP'><button>Upload keys SD to DL32</button></a>");
+  pageContent += F("<br/>");
+  pageContent += F("<a href='/keysFFattoSDHTTP'><button>Download keys DL32 to SD</button></a>");
   pageContent += F("<br/>");
   pageContent += F("<a href='/addKeyModeHTTP'><button>Enter add key mode</button></a>");
   pageContent += F("<br/>");
@@ -2557,7 +2659,9 @@ void startWebServer() {
   webServer.on("/purgeConfigHTTP", purgeConfigHTTP);
   webServer.on("/restartESPHTTP", restartESPHTTP);
   webServer.on("/configSDtoFFatHTTP", configSDtoFFatHTTP);
+  webServer.on("/configFFattoSDHTTP", configFFattoSDHTTP);
   webServer.on("/keysSDtoFFatHTTP", keysSDtoFFatHTTP);
+  webServer.on("/keysFFattoSDHTTP", keysFFattoSDHTTP);
   webServer.on("/displayAddressingHTTP", displayAddressingHTTP);
   webServer.on("/outputAddressingHTTP", outputAddressingHTTP);
   webServer.on("/saveAddressingStaticHTTP", saveAddressingStaticHTTP);
@@ -2612,17 +2716,18 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println("");
-  Serial.println("================");
-  Serial.println("STARTUP SEQUENCE");
-  Serial.println("================");
-  Serial.println("Initializing WDT...");
-  secondTick.attach(1, ISRwatchdog);
-  fatfs_setup();
-  sd_setup();
+  Serial.println("======================");
+  Serial.println("|  STARTUP SEQUENCE  |");
+  Serial.println("======================");
   detectHardwareRevision();
   Serial.print("DL32 firmware version ");
   Serial.println(codeVersion);
-  Serial.println("Configuring GPIO...");
+  Serial.print("Initializing WDT...");
+  secondTick.attach(1, ISRwatchdog);
+  Serial.println("OK");
+  fatfs_setup();
+  sd_setup();
+  Serial.print("Configuring GPIO...");
   Serial.flush();
   pinMode(buzzer_pin, OUTPUT);
   pinMode(lockRelay_pin, OUTPUT);
@@ -2638,14 +2743,16 @@ void setup() {
   pinMode(DS02, INPUT_PULLUP);
   pinMode(DS03, INPUT_PULLUP);
   pinMode(DS04, INPUT_PULLUP);
+  pinMode(IO0, INPUT_PULLUP);
   digitalWrite(buzzer_pin, LOW);
+  Serial.println("OK");
   checkSDPresent(0);
 
   // Should load default config if run for the first time
-  Serial.println("Loading configuration...");
+  Serial.print("Loading configuration...");
   loadFSJSON_config(config_filename, config);
 
-  Serial.print("Loading addressing... ");
+  Serial.print("Loading addressing...");
   loadFSJSON_addressing(addressing_filename, addressing);
 
   // Check Dip Switch states
@@ -2668,15 +2775,16 @@ void setup() {
     Serial.println(" - Garage mode");
     garage_mode = true;
   }
-  if (strcmp(config.wifi_enabled, "false") == 0) {
+  if (!(config.wifi_enabled)) {
     Serial.print("Wifi disabled");
     Serial.println(" - Forced offline mode");
     forceOffline = true;
   }
-  if (strcmp(config.magsr_present, "true") == 0) {
-    Serial.print("Magnetic sensor present");
-    Serial.println(" - Door state sensor enabled");
+  if (config.magsr_present) {
+    Serial.println("Door state sensor enabled");
     magsr_present = true;
+  } else {
+    Serial.println("Door state sensor disabled");
   }
 
   if (failSecure) {
@@ -2689,10 +2797,12 @@ void setup() {
     startWebServer();
     ftpSrv.setCallback(_callback);
     ftpSrv.setTransferCallback(_transferCallback);
-    if (strcmp(config.ftp_enabled, "true") == 0) {
+    if (config.ftp_enabled) {
       startFTPServer();
+    } else {
+      Serial.println("FTP server disabled.");
     }
-    if (strcmp(config.mqtt_enabled, "true") == 0) {
+    if (config.mqtt_enabled) {
       Serial.print("Attempting connection to MQTT broker ");
       Serial.print(config.mqtt_server);
       Serial.println("... ");
@@ -2712,6 +2822,7 @@ void setup() {
   ledcAttachChannel(buzzer_pin, freq, resolution, channel);
   setPixBlue();
   Serial.println("Ready.");
+  Serial.println("");
 }
 
 // --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP ---
@@ -2727,7 +2838,7 @@ void loop() {
       webServer.handleClient();
       ftpSrv.handleFTP();
       ElegantOTA.loop();
-      if (strcmp(config.mqtt_enabled, "true") == 0) {
+      if (config.mqtt_enabled) {
         maintainConnnectionMQTT();
         checkMqtt();
       }
@@ -2761,6 +2872,7 @@ void loop() {
   checkMagSensor();
   checkSerialCmd();
   checkExit();
+  check0();
   checkAUX();
   checkBell();
   checkSDPresent(1);
