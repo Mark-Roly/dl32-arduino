@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 24/04/2025
+  Last updated 27/04/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
     
 */
 
-#define codeVersion 20250424
+#define codeVersion 20250427
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -175,10 +175,12 @@ Config config;
 Addressing addressing;
 WiFiClient esp32Client;
 WebServer webServer(80);
+File uploadFile;
 Wiegand wiegand;
 Ticker secondTick;
 FtpServer ftpSrv;
 PubSubClient MQTTclient(esp32Client);
+
 
 // --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions ---
 
@@ -389,6 +391,24 @@ void removeKey(String key) {
   if (FFat.exists("/keys_temp")) {
     deleteFile(FFat, "/keys_temp");
   }
+}
+
+void previewFile(String file) {
+  if (FFat_present) {
+    String path = "/" + file;
+    File preview = FFat.open(path);
+    if (preview) {
+      webServer.sendHeader("Content-Type", "text/plain");
+      webServer.streamFile(preview, "text/plain");
+      preview.close();
+      Serial.print("Previewing file: ");
+      Serial.println(file);
+      return;
+    } else {
+      Serial.println("Failed to open file for preview: " + file);
+    }
+  }
+  webServer.send(404, "text/plain", "File not found");
 }
 
 // Polled function to check if a key has been recently read
@@ -2114,7 +2134,72 @@ void displayKeys() {
   pageContent += F("<input type='text' id='key' name='key' class='addKeyInput'></input>");
   pageContent += F("<input type='submit' value='ADD' class='addKeyButton' required>");
   pageContent += F("</form>");
+  pageContent += F("<br/>");
   
+}
+
+// Display file management pane
+void displayFiles() {
+  pageContent += F("<div id='previewModal' style='display:none; position:fixed; border:2px solid #000; z-index:1000; overflow:auto;'>");
+  pageContent += F("<pre id='previewContent' style='max-height:400px; overflow:auto; text-align:left;'></pre>");
+  pageContent += F("<button onclick='closePreview()' style='width:100%; height:40px; background-color:#ff3200; color:black; border:none; font-size:16px;'>Close</button>");
+  pageContent += F("</div>");
+  //pageContent += F("<div id='previewModal'>");
+  //pageContent += F("  <pre id='previewContent' style='width: 100%; height: 80%;'></pre><br/>");
+  //pageContent += F("  <button onclick='closePreview()'>Close</button>");
+  //pageContent += F("</div>");
+  pageContent += F("<script>");
+  pageContent += F("function closePreview() {");
+  pageContent += F("  document.getElementById('previewModal').style.display = 'none';");
+  pageContent += F("}");
+  pageContent += F("async function previewFile(encodedName) {");
+  pageContent += F("  const res = await fetch('/previewFile/' + encodeURIComponent(encodedName));");
+  pageContent += F("  const text = await res.text();");
+  pageContent += F("  document.getElementById('previewContent').innerText = text;");
+  pageContent += F("  document.getElementById('previewModal').style.display = 'block';");
+  pageContent += F("}");
+  pageContent += F("</script>");
+  pageContent += F("<a class='header'>File Management</a>");
+  pageContent += F("<br/> <table class='fileTable'>");
+  int count = 0;
+  File root = FFat.open("/");
+  File file = root.openNextFile();
+  while (file) {
+    if (!file.isDirectory()) {
+      String name = String(file.name());
+      if (name.startsWith("/")) {
+        name = name.substring(1);
+      }
+      pageContent += F("<tr><td class='fileCell'>");
+      pageContent += (name + " (" + String(file.size()) + " bytes)");
+      pageContent += F("</td><td class='fileMgCell'>");
+      pageContent += F("<a class='fileMgLink' href='#' onclick='previewFile(\"");
+      pageContent += name;
+      pageContent += F("\")'>VIEW</a>");
+      pageContent += F("</td><td class='fileMgCell'>");
+      pageContent += F("<a class='fileMgLink' href='/downloadFile/");
+      pageContent += (name + " ");
+      pageContent += F("'>DLOAD</a>");
+      pageContent += F("</td><td class='fileMgCell'>");
+      pageContent += F("<a class='fileMgLink' href='/deleteFile/");
+      pageContent += (name + " ");
+      pageContent += F("'>DEL</a>");
+      pageContent += F("</td>");
+      pageContent += F("</tr>");
+      count++;
+    }
+    file = root.openNextFile();
+  }
+  if (count < 1) {
+    pageContent += F("<tr><td class='fileCell'>");
+    pageContent += F("[NO FILES]");
+    pageContent += F("</td></tr>");
+  }
+  pageContent += F("</table>");
+  pageContent += F("<form method='POST' action='/upload' enctype='multipart/form-data' style='margin-top:5px;'>");
+  pageContent += F("  <input type='file' name='file' required class='fileMgInput' style='width:235px;'>");
+  pageContent += F("<input type='submit' class='fileMgInput' style='width:60px; vertical-align:middle; margin-left:2px;' value='UPLOAD'>");
+  pageContent += F("</form>");
 }
 
 // Output config to serial
@@ -2136,31 +2221,11 @@ void outputConfig() {
   Serial.println("\n");
 }
 
-// Display config in webUI
-void displayConfig() {
-  sendHTMLHeader();
-  siteButtons();
-  displayKeys();
-  pageContent += F("<br/> <a href='/'>[Close Panel]</a> <textarea style='height:300px;'' readonly>");
-  char buffer[64];
-  File dispFile = FFat.open(config_filename);
-  while (dispFile.available()) {
-    int l = dispFile.readBytesUntil('\n', buffer, sizeof(buffer));
-    buffer[l] = 0;
-    pageContent += F(buffer);
-  }
-  pageContent += F("</textarea>");
-  siteModes();
-  siteFooter();
-  sendHTMLContent();
-  sendHTMLStop();
-  dispFile.close();
-}
-
 void MainPage() {
   sendHTMLHeader();
   siteButtons();
   displayKeys();
+  displayFiles();
   siteModes();
   siteFooter();
   sendHTMLContent();
@@ -2286,43 +2351,6 @@ void ringBellHTTP() {
   ringBell();
 }
 
-void displayAddressingHTTP() {
-  sendHTMLHeader();
-  siteButtons();
-  pageContent += F("<br/> <textarea readonly>");
-  pageContent += F("IP Address: ");
-  //pageContent += F(String(WiFi.localIP()));
-  pageContent += F("<br/>");
-  pageContent += F("Subnet Mask: ");
-  //pageContent += F(String(WiFi.subnetMask()));
-  pageContent += F("<br/>");
-  pageContent += F("Default Gateway: ");
-  //pageContent += F(String(WiFi.gatewayIP()));
-  pageContent += F("</textarea>");
-  siteModes();
-  siteFooter();
-  sendHTMLContent();
-  sendHTMLStop();
-}
-
-void outputAddressingHTTP() {
-  Serial.println("Current IP Addressing:");
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
-  Serial.print("Subnet Mask: ");
-  Serial.println(WiFi.subnetMask());
-  Serial.print("Defalt Gateway: ");
-  Serial.println(WiFi.gatewayIP());
-  sendHTMLHeader();
-  siteButtons();
-  pageContent += F("<br/> <textarea readonly>Addressing output to serial.</textarea>");
-  siteModes();
-  siteFooter();
-  sendHTMLContent();
-  sendHTMLStop();
-  Serial.println("\n");
-}
-
 int parseSDAddressingFile () {
   //TODO
 }
@@ -2353,28 +2381,11 @@ void saveAddressingStaticHTTP() {
 
 void downloadAddressingStaticHTTP() {
   int result = FFat_file_download(addressing_filename);
-  sendHTMLHeader();
-  siteButtons();
-  if (result == 0) {
-    pageContent += F("<br/> <textarea readonly>Downloading addressing file</textarea>");
-  } else {
-    pageContent += F("<br/> <textarea readonly>Unable to download addressing file</textarea>");
-  }
-  siteModes();
-  siteFooter();
-  sendHTMLContent();
-  sendHTMLStop();
+  MainPage();
 }
 
 void addressingStaticSDtoFFatHTTP() {
-  addressingSDtoFFat();
-  sendHTMLHeader();
-  siteButtons();
-  displayKeys();
-  siteModes();
-  siteFooter();
-  sendHTMLContent();
-  sendHTMLStop();
+  MainPage();
 }
 
 void purgeAddressingStaticHTTP() {
@@ -2386,52 +2397,6 @@ void purgeAddressingStaticHTTP() {
     mqttPublish(config.mqtt_stat_topic, "Static addressing file purged");
   }
   deleteFile(FFat, addressing_filename);
-}
-
-// Output a list of FS files to serial
-void outputFSHTTP() {
-  listDir(FFat, "/", 0);
-  sendHTMLHeader();
-  siteButtons();
-  pageContent += F("<br/> <textarea readonly>FS files output to serial.</textarea>");
-  siteModes();
-  siteFooter();
-  sendHTMLContent();
-  sendHTMLStop();
-}
-
-// Display a list of FS files in webpage
-void displayFSHTTP() {
-  sendHTMLHeader();
-  siteButtons();
-  pageContent += F("<br/> <textarea readonly>WIP</textarea>");
-  siteModes();
-  siteFooter();
-  sendHTMLContent();
-  sendHTMLStop();
-}
-
-// Output a list of SD files to serial
-void outputSDFSHTTP() {
-  listDir(SD, "/", 0);
-  sendHTMLHeader();
-  siteButtons();
-  pageContent += F("<br/> <textarea readonly>SD files output to serial.</textarea>");
-  siteModes();
-  siteFooter();
-  sendHTMLContent();
-  sendHTMLStop();
-}
-
-// Display a list of SD files in webpage
-void displaySDFSHTTP() {
-  sendHTMLHeader();
-  siteButtons();
-  pageContent += F("<br/> <textarea readonly>WIP</textarea>");
-  siteModes();
-  siteFooter();
-  sendHTMLContent();
-  sendHTMLStop();
 }
 
 void sendHTMLHeader() {
@@ -2466,11 +2431,22 @@ void siteHeader() {
   pageContent += F("div {width: 350px; margin: 20px auto; text-align: center; border: 3px solid #ff3200; background-color: #555555; left: auto; right: auto;}");
   pageContent += F(".header {font-family: Arial, Helvetica, sans-serif; font-size: 20px; color: #ff3200;}");
   pageContent += F(".smalltext {font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #ff3200;}");
+  pageContent += F("#previewModal {display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:400px; background:white; border:2px solid black; padding:10px; z-index:1000;}");
+  pageContent += F("#previewModal button {margin-top: 5px; margin-right: 10px;}");
   pageContent += F(".keyTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; border: 1px solid #ff3200; border-collapse: collapse;}");
   pageContent += F(".keyCell {height: 15px; color: #ff3200;}");
   pageContent += F(".keyDelCell {height: 15px; width: 45px; background-color: #ff3200; color: black;}");
   pageContent += F(".keyDelCell:hover {height: 15px; width: 45px; background-color: #ef2200; color: black; border: 1px solid #000000}");
   pageContent += F(".keyDelLink {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; text-decoration: none;}");
+  pageContent += F(".fileTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; border: 1px solid #ff3200; border-collapse: collapse;}");
+  pageContent += F(".fileCell {height: 15px; color: #ff3200;}");
+  pageContent += F(".fileMgCell {height: 15px; width: 45px; background-color: #ff3200; color: black; border: 1px solid #000000}");
+  pageContent += F(".fileMgCell:hover {height: 15px; width: 45px; background-color: #ef2200; color: black; border: 1px solid #000000}");
+  pageContent += F(".fileMgLink {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; text-decoration: none;}");
+  pageContent += F(".fileMgInput {height: 18px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}");
+  pageContent += F(".fileMgInput:hover {height: 18px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}");
+  pageContent += F(".orangeButton {height 30px; width: 49px; auto;background-color: #ff3200; border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}");
+  pageContent += F(".orangeButton:hover {height 30px; width: 49px; background-color: #ef2200; border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}");
   pageContent += F(".addKeyInput {height 17px; width: 245px;border: 1px solid #ff3200; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black;}");
   pageContent += F(".addKeyButton {height 30px; width: 49px; background-color: #ff3200; border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}");
   pageContent += F(".addKeyButton:hover {height 30px; width: 49px; background-color: #ef2200; border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}");
@@ -2535,28 +2511,18 @@ void siteButtons() {
   pageContent += F("<br/>");
   pageContent += F("<a href='/restartESPHTTP'><button>Restart DL32</button></a>");
   pageContent += F("<br/> <br/>");
- 
   pageContent += F("<a class='header'>System</a>");
   pageContent += F("<a href='/downloadConfigHTTP'><button>Download config file</button></a>");
   pageContent += F("<br/>");
-  //pageContent += F("<a href='/outputConfig'><button>Output config to Serial</button></a>");
-  //pageContent += F("<br/>");
   pageContent += F("<a href='/configSDtoFFatHTTP'><button>Upload config SD to DL32</button></a>");
   pageContent += F("<br/>");
   pageContent += F("<a href='/configFFattoSDHTTP'><button>Download config DL32 to SD</button></a>");
-  pageContent += F("<br/>");
-  pageContent += F("<a href='/displayConfig'><button>Display config in page</button></a>");
   pageContent += F("<br/>");
   pageContent += F("<a href='/purgeConfigHTTP'><button>Purge configuration</button></a>");
   pageContent += F("<br/>");
   pageContent += F("<a href='/update'><button>Update firmware</button></a>");
   pageContent += F("<br/><br/>");
-
   pageContent += F("<a class='header'>IP Addressing</a>");
-  //pageContent += F("<a href='/displayAddressingHTTP'><button style='background-color: #999999; color: #777777';>Show IP addressing</button></a>");
-  //pageContent += F("<br/>");
-  //pageContent += F("<a href='/outputAddressingHTTP'><button>Output IP addressing to Serial</button></a>");
-  //pageContent += F("<br/>");
   if (staticIP) {
     pageContent += F("<a href='/downloadAddressingStaticHTTP'><button>Download static addressing file</button></a>");
     pageContent += F("<br/>");
@@ -2575,10 +2541,6 @@ void siteButtons() {
   pageContent += F("<a class='header'>Key Management</a>");
   pageContent += F("<a href='/downloadKeysHTTP'><button>Download key file</button></a>");
   pageContent += F("<br/>");
-  //pageContent += F("<a href='/outputKeys'><button>Output keys to Serial</button></a>");
-  //pageContent += F("<br/>");
-  //pageContent += F("<a href='/displayKeys'><button>Display keys in page</button></a>");
-  //pageContent += F("<br/>");
   pageContent += F("<a href='/keysSDtoFFatHTTP'><button>Upload keys SD to DL32</button></a>");
   pageContent += F("<br/>");
   pageContent += F("<a href='/keysFFattoSDHTTP'><button>Download keys DL32 to SD</button></a>");
@@ -2587,20 +2549,8 @@ void siteButtons() {
   pageContent += F("<br/>");
   if (FFat.exists(keys_filename)) {
     pageContent += F("<a href='/purgeKeysHTTP'><button>Purge stored keys</button></a>");
-  } else {
-    pageContent += F("<a href='/purgeKeysHTTP'><button style='background-color: #999999; color: #777777';>Purge stored keys</button></a>");
-  }
-  pageContent += F("<br/>");
-
-  //pageContent += F("<a class='header'>Filesystem Operations</a>");
-  //pageContent += F("<a href='/outputFSHTTP'><button>Output FFat Contents to Serial</button></a>");
-  //pageContent += F("<br/>");
-  //pageContent += F("<a href='/displayFSHTTP'><button style='background-color: #999999; color: #777777';>Display FFat contents in page</button></a>");
-  //pageContent += F("<br/>");
-  //pageContent += F("<a href='/outputSDFSHTTP'><button>Output SD FS Contents to Serial</button></a>");
-  //pageContent += F("<br/>");
-  //pageContent += F("<a href='/displaySDFSHTTP'><button style='background-color: #999999; color: #777777';>Display SD FS contents in page</button></a>");
-  //pageContent += F("<br/>");
+    pageContent += F("<br/>");
+  } 
 }
 
 void siteFooter() {
@@ -2641,7 +2591,6 @@ void startFTPServer() {
 
 void startWebServer() {
   webServer.on("/downloadKeysHTTP", downloadKeysHTTP);
-  webServer.on("/outputKeys", outputKeys);
   webServer.on("/unlockHTTP", unlockHTTP);
   webServer.on("/garageToggleHTTP", garageToggleHTTP);
   webServer.on("/garageOpenHTTP", garageOpenHTTP);
@@ -2650,20 +2599,12 @@ void startWebServer() {
   webServer.on("/downloadConfigHTTP", downloadConfigHTTP);
   webServer.on("/addKeyModeHTTP", addKeyModeHTTP);
   webServer.on("/purgeKeysHTTP", purgeKeysHTTP);
-  webServer.on("/displayConfig", displayConfig);
-  webServer.on("/outputConfig", outputConfig);
-  webServer.on("/outputFSHTTP", outputFSHTTP);
-  webServer.on("/displayFSHTTP", displayFSHTTP);
-  webServer.on("/outputSDFSHTTP", outputSDFSHTTP);
-  webServer.on("/displaySDFSHTTP", displaySDFSHTTP);
   webServer.on("/purgeConfigHTTP", purgeConfigHTTP);
   webServer.on("/restartESPHTTP", restartESPHTTP);
   webServer.on("/configSDtoFFatHTTP", configSDtoFFatHTTP);
   webServer.on("/configFFattoSDHTTP", configFFattoSDHTTP);
   webServer.on("/keysSDtoFFatHTTP", keysSDtoFFatHTTP);
   webServer.on("/keysFFattoSDHTTP", keysFFattoSDHTTP);
-  webServer.on("/displayAddressingHTTP", displayAddressingHTTP);
-  webServer.on("/outputAddressingHTTP", outputAddressingHTTP);
   webServer.on("/saveAddressingStaticHTTP", saveAddressingStaticHTTP);
   webServer.on("/downloadAddressingStaticHTTP", downloadAddressingStaticHTTP);
   webServer.on("/addressingStaticSDtoFFatHTTP", addressingStaticSDtoFFatHTTP);
@@ -2681,12 +2622,38 @@ void startWebServer() {
     removeKey(webServer.pathArg(0));
     MainPage();
   });
+  webServer.on(UriRegex("/previewFile/([0-9a-zA-Z.]{3,16})"), HTTP_GET, [&]() {
+    previewFile(webServer.pathArg(0));
+    MainPage();
+  });
+  webServer.on(UriRegex("/downloadFile/([0-9a-zA-Z.\\-_]{3,32})"), HTTP_GET, []() {
+    String filename = "/" + webServer.pathArg(0);
+    if (FFat.exists(filename)) {
+      File file = FFat.open(filename, FILE_READ);
+      webServer.sendHeader("Content-Type", "application/octet-stream");
+      webServer.sendHeader("Content-Disposition", "attachment; filename=\"" + String(webServer.pathArg(0)) + "\"");
+      webServer.streamFile(file, "application/octet-stream");
+      file.close();
+    } else {
+      webServer.send(404, "text/plain", "File not found");
+    }
+  });
+  webServer.on(UriRegex("/deleteFile/([0-9a-zA-Z._-]{3,16})"), HTTP_GET, [&]() {
+    String path = "/" + webServer.pathArg(0);
+    deleteFile(FFat, path.c_str());
+    MainPage();
+  });
   webServer.on(UriRegex("/serial/([0-9a-zA-Z_-]{3,10})"), HTTP_GET, [&]() {
     Serial.print("URL Command entered: ");
     Serial.print(webServer.pathArg(0));
     executeCommand(webServer.pathArg(0));
     MainPage();
   });
+
+  webServer.on("/upload", HTTP_POST, []() {
+    MainPage();
+  }, handleFileUpload);
+
   webServer.on("/", MainPage);
   webServer.on(UriRegex("/addFormKey/.{0,20}"), HTTP_GET, [&]() {
     Serial.print("Writing key ");
@@ -2706,6 +2673,24 @@ void startWebServer() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.print("Web Server started at http://");
     Serial.println(WiFi.localIP());
+  }
+}
+
+// --- File Upload Functions --- File Upload Functions --- File Upload Functions --- File Upload Functions --- File Upload Functions ---
+
+void handleFileUpload() {
+  HTTPUpload& upload = webServer.upload();
+  if (upload.status == UPLOAD_FILE_START) {
+    String filename = "/" + upload.filename;
+    uploadFile = FFat.open(filename, FILE_WRITE);
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (uploadFile) {
+      uploadFile.write(upload.buf, upload.currentSize);
+    }
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (uploadFile) {
+      uploadFile.close();
+    }
   }
 }
 
