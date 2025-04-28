@@ -7,8 +7,8 @@
 
 <!-- ABOUT THE PROJECT -->
 ## About The Project
-
-TBC
+An ongoing effort to create the perfect smart lock.
+In short, the DL32-S3 is a smart lock controller that can be interacted with via RFID, keypad, MQTT, HTTP, FTP, Serial, and supports a varierty of accessories.
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <!-- GETTING STARTED -->
@@ -80,7 +80,7 @@ See descriptions of each parameter below:
 - addKeyTimeoutDur_S (integer, 10) Time in seconds that the unit will await a new card when in Key Add Mode before timing out
 ```
 
-### Flashing the configuration to the unit
+### Flashing configuration to the unit
 Insert the SD card into the slot
 With the unit powered on, gold the button labeled AUX for 5 seconds until you hear 5 short beeps and the blue LED turns purple.
 Release the AUX button.
