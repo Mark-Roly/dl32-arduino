@@ -35,6 +35,7 @@ Use the below sample dl32.json configuration as a base:
     "mqtt_auth": false,
     "mqtt_user": "mqttuser",
     "mqtt_password": "mqttpass",
+    "magsr_present" : true,
     "ftp_enabled": false,
     "ftp_user": "ftpuser",
     "ftp_password": "ftppass",
@@ -52,7 +53,32 @@ Use the below sample dl32.json configuration as a base:
 
 See descriptions of each parameter below:
 
- - TBC
+- **[param name]** ([datatype], [default val]) [description]
+```
+- **wifi_enabled** (boolean, false) Dictates whether or not the onboard mqtt client is enabled 
+- **wifi_ssid** (string) SSID for wifi network connection
+- **wifi_password** (string) Password for wifi network connection
+- **mqtt_enabled** (boolean, false) Dictates whether or not the onboard mqtt client is enabled 
+- **mqtt_server** (string) Hostname or IP address of remote mqtt broker
+- **mqtt_topic** (string, "DEFAULT_dl32s3") mqtt topic base to use for sub topics
+- **mqtt_client_name** (string, "DEFAULT_dl32s3") Client name to use for mqtt connection
+- **mqtt_auth** (boolean, false) Dictates whether username/password credentials should be used for mqtt connection
+- **mqtt_user** (string) Username for mqtt broker connection
+- **mqtt_password** (string) Password for mqtt broker connection
+- **magsr_present** (boolean, false) Dictates whether or not a connected magnetic door sensor should be used 
+- **ftp_enabled** (boolean, false) Dictates whether or not the onboard ftp service is enabled 
+- **ftp_user** (string) Username for ftp connections
+- **ftp_password** (string) Password for ftp connections
+- **exitUnlockDur_S** (integer, 5) Time in seconds that the lock will remain unlocked for when exit button is pressed
+- **httpUnlockDur_S** (integer, 5) Time in seconds that the lock will remain unlocked for when WebUI unlock is performed
+- **keyUnlockDur_S** (integer, 5)  Time in seconds that the lock will remain unlocked for when valid RFID key is read
+- **cmndUnlockDur_S** (integer, 5) Time in seconds that the lock will remain unlocked for when url/mqtt/serial unlock command is sent
+- **badKeyLockoutDur_S** (integer, 5) Time in seconds that the unit will turn unresponsive for with the red led illuminated when an unauthorized key is read
+- **exitButMinThresh_Ms** (integer, 50) Minimum time in miliseconds that the exit button must be pressed for to register an unlock
+- **keyWaitDur_Ms** (integer, 1500) Timeout in miliseconds between keypad digits eg: max time between button presses for keypad input
+- **garageMomentaryDur_Ms** (integer, 500) Time in miliseconds that the momentary signal will be on when in garage mode
+- **addKeyTimeoutDur_S** (integer, 10) Time in seconds that the unit will await a new card when in Key Add Mode before timing out
+```
 
 ### Flashing the configuration to the unit
 Insert the SD card into the slot
