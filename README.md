@@ -7,7 +7,7 @@
 
 <!-- ABOUT THE PROJECT -->
 ## About The Project
-An ongoing effort to create the perfect smart lock.
+An ongoing effort to create the perfect smart lock.<br/>
 In short, the DL32-S3 is a smart lock controller that can be interacted with via RFID, keypad, MQTT, HTTP, FTP, Serial, and supports a varierty of accessories.
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
