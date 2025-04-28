@@ -30,7 +30,7 @@
     
 */
 
-#define codeVersion 20250427
+#define codeVersion 20250428
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -310,88 +310,67 @@ void writeKey(String key) {
 }
 
 void removeKey(String key) {
-  boolean verboseScanOutput = false;
-  File keysFile = FFat.open(keys_filename, "r");
-  int charMatches = 0;
-  int removeMatches = 0;
-  char keyBuffer[16];
-  if (FFat.exists(keys_filename) == false) {
+  if (!FFat.exists(keys_filename)) {
     Serial.println("Key file not present. Cancelling operation.");
     return;
   }
-  if (FFat.exists("/keys_old")) {
-    deleteFile(FFat, "/keys_old");
+  File keysFile = FFat.open(keys_filename, "r");
+  if (!keysFile) {
+    Serial.println("Failed to open keys file for reading.");
+    return;
   }
   if (FFat.exists("/keys_temp")) {
     deleteFile(FFat, "/keys_temp");
   }
-  Serial.print("Checking key for removal: ");
-  Serial.println(key);
+  File tempFile = FFat.open("/keys_temp", "w");
+  if (!tempFile) {
+    Serial.println("Failed to open temp file for writing.");
+    keysFile.close();
+    return;
+  }
+  const size_t bufferLimit = 1024; // 1KB buffer
+  String writeBuffer = "";
+  bool found = false;
   while (keysFile.available()) {
-    int keyDigits = (keysFile.readBytesUntil('\n', keyBuffer, sizeof(keyBuffer))-1);
-    if (verboseScanOutput) {
-      Serial.print("key digits = ");
-      Serial.println(String(keyDigits));
+    String fileKey = keysFile.readStringUntil('\n');
+    fileKey.trim(); // Clean up trailing whitespace/newlines
+    if (fileKey.length() == 0) continue; // Skip empty lines
+    if (fileKey == key) {
+      found = true;
+      continue; // Skip writing this key
     }
-    keyBuffer[keyDigits] = 0;
-    charMatches = 0;
-    for (int loopCount = 0; loopCount < (keyDigits); loopCount++) {
-      if (verboseScanOutput) {
-        Serial.print("comparing ");
-        Serial.print(key[loopCount]);
-        Serial.print(" with ");
-        Serial.println(keyBuffer[loopCount]);
-      }
-      if (key[loopCount] == keyBuffer[loopCount]) {
-        charMatches++;
-      }
-    }
-    if (verboseScanOutput) {
-      Serial.print("charMatches: ");
-      Serial.println(charMatches);
-      Serial.print("keyDigits: ");
-      Serial.println(keyDigits);
-      Serial.print("Input Key length: ");
-      Serial.println(key.length());
-    }
-    if ((charMatches == keyDigits)&&(keyDigits == key.length())) {
-      if (verboseScanOutput) {
-        Serial.print(keyBuffer);
-        Serial.print(" - ");
-        Serial.println("MATCH");
-        Serial.print("----- EXCLUDING ");
-        Serial.print(keyBuffer);
-        Serial.println(" FROM NEW FILE");
-      }
-      removeMatches++;
-      //exclude from copy
-      
-    } else {
-      if (verboseScanOutput) {
-        Serial.println("NO MATCH");
-        Serial.print("----- COPYING ");
-        Serial.print(keyBuffer);
-        Serial.println(" TO NEW FILE");
-      }
-    appendlnFile(FFat, "/keys_temp", keyBuffer);
+    writeBuffer += fileKey + "\n";
+    if (writeBuffer.length() >= bufferLimit) {
+      tempFile.print(writeBuffer); // Dump buffer to file
+      writeBuffer = "";            // Clear buffer
     }
   }
+
+  // Write any remaining buffer content
+  if (writeBuffer.length() > 0) {
+    tempFile.print(writeBuffer);
+  }
+
   keysFile.close();
-  if (removeMatches > 0) {
+  tempFile.close();
+
+  if (found) {
+    if (FFat.exists("/keys_old")) {
+      deleteFile(FFat, "/keys_old");
+    }
+    renameFile(FFat, keys_filename, "/keys_old");
+    renameFile(FFat, "/keys_temp", keys_filename);
     Serial.print("Removed key ");
     Serial.print(key);
     Serial.println(" from authorized list.");
-    renameFile(FFat, keys_filename, "/keys_old");
-    renameFile(FFat, "/keys_temp", keys_filename);
   } else {
+    deleteFile(FFat, "/keys_temp");
     Serial.print("Key ");
     Serial.print(key);
-    Serial.println(" not present in authorized list.");
-  }
-  if (FFat.exists("/keys_temp")) {
-    deleteFile(FFat, "/keys_temp");
+    Serial.println(" not found in authorized list.");
   }
 }
+
 
 void previewFile(String file) {
   if (FFat_present) {
