@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 27/04/2025
+  Last updated 29/04/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
     
 */
 
-#define codeVersion 20250428
+#define codeVersion 20250429
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -45,11 +45,11 @@
 #include <Ticker.h>             // Ticker by Bert Melis https://github.com/espressif/arduino-esp32/blob/master/libraries/Ticker
 #include <uri/UriRegex.h>       // UriRegex by espressif https://github.com/espressif/arduino-esp32/blob/master/libraries/WebServer
 #include <uptime_formatter.h>   // Uptime-Library by YiannisBourkelis https://github.com/YiannisBourkelis/Uptime-Library
-#include <ElegantOTA.h>         // ElegantOTA by yushsharma82 https://github.com/ayushsharma82/ElegantOTA
 #include <FS.h>                 // FS by Ivan Grokhotkov https://github.com/espressif/arduino-esp32/blob/master/libraries/FS
 #include <FFat.h>               // FFAT by espressif https://github.com/espressif/arduino-esp32/blob/master/libraries/FFat
 #include <SD.h>                 // SD by espressif https://github.com/espressif/arduino-esp32/blob/master/libraries/SD
 #include <SimpleFTPServer.h>    // SimpleFTPServer by Renzo Mischianti https://mischianti.org/category/my-libraries/simple-ftp-server/
+#include <Update.h>
 
 // Hardware Rev 20240812 pins [Since codeVersion 20240819]
 #define buzzer_pin 14
@@ -189,30 +189,6 @@ void ISRwatchdog() {
   if (watchdogCount == WDT_TIMEOUT_S) {
     Serial.println("Watchdog invoked!");
     ESP.restart();
-  }
-}
-
-// --- OTA Functions --- OTA Functions --- OTA Functions --- OTA Functions --- OTA Functions --- OTA Functions --- OTA Functions ---
-
-void onOTAStart() {
-  // Log when OTA has started
-  Serial.println("OTA update started!");
-}
-
-void onOTAProgress(size_t current, size_t final) {
-  // Log every 1 second
-  if (millis() - ota_progress_millis > 1000) {
-    ota_progress_millis = millis();
-    Serial.printf("OTA Progress Current: %u bytes, Final: %u bytes\n", current, final);
-  }
-}
-
-void onOTAEnd(bool success) {
-  // Log when OTA has finished
-  if (success) {
-    Serial.println("OTA update finished successfully!");
-  } else {
-    Serial.println("There was an error during OTA update!");
   }
 }
 
@@ -975,6 +951,29 @@ void addKeyMode() {
   }
   setPixBlue();
   return;
+}
+
+String urlDecode(const String& input) {
+  String decoded = "";
+  char temp[] = "0x00";
+  unsigned int len = input.length();
+  unsigned int i = 0;
+
+  while (i < len) {
+    char c = input.charAt(i);
+    if (c == '+') {
+      decoded += ' ';
+    } else if (c == '%' && i + 2 < len) {
+      temp[2] = input.charAt(i + 1);
+      temp[3] = input.charAt(i + 2);
+      decoded += (char)strtol(temp, NULL, 16);
+      i += 2;
+    } else {
+      decoded += c;
+    }
+    i++;
+  }
+  return decoded;
 }
 
 // --- Neopixel Functions --- Neopixel Functions --- Neopixel Functions --- Neopixel Functions --- Neopixel Functions --- Neopixel Functions ---
@@ -2117,16 +2116,55 @@ void displayKeys() {
   
 }
 
+const char* updateScript = R"rawliteral(
+  <script>
+    function uploadFirmware() {
+      var file = document.getElementById("firmware").files[0];
+      if (!file) {
+        alert("Please choose a file first!");
+        return;
+      }
+      var xhr = new XMLHttpRequest();
+      xhr.upload.addEventListener("progress", function(evt) {
+        if (evt.lengthComputable) {
+          var percent = (evt.loaded / evt.total) * 100;
+          document.getElementById("progress").value = percent;
+        }
+      }, false);
+      xhr.open("POST", "/update_post", true);
+      xhr.onload = function () {
+        if (xhr.status == 200) {
+          alert(xhr.responseText);
+          setTimeout(function(){ location.reload(); }, 3000);
+        } else {
+          alert("Error: " + xhr.responseText);
+        }
+      };
+      var formData = new FormData();
+      formData.append("firmware", file);
+      xhr.send(formData);
+    }
+  </script>
+)rawliteral";
+
+const char* updateForm = R"rawliteral(
+  <a class="header">Firmware Update</a><br/>
+  <input type="file" name="file" class="updateInput" id="firmware"  style='width:235px;' required>
+  <button type='button' class='fileMgInput' style='width:60px; vertical-align:middle; margin-left:2px;' onclick='uploadFirmware()'>UPDATE</button>
+  <progress id="progress" class="uploadBar" value="0" max="100"></progress><br/>
+)rawliteral";
+
+void updateControls() {
+  pageContent += (updateScript);
+  pageContent += (updateForm);
+}
+
 // Display file management pane
 void displayFiles() {
-  pageContent += F("<div id='previewModal' style='display:none; position:fixed; border:2px solid #000; z-index:1000; overflow:auto;'>");
-  pageContent += F("<pre id='previewContent' style='max-height:400px; overflow:auto; text-align:left;'></pre>");
+  pageContent += F("<div id='previewModal' class='previewModal' style='display:none; position:fixed; border:2px solid #000; z-index:1000; overflow:auto;'>");
+  pageContent += F("<pre id='previewContent' class='previewModal' style='max-height:400px; overflow:auto; text-align:left;'></pre>");
   pageContent += F("<button onclick='closePreview()' style='width:100%; height:40px; background-color:#ff3200; color:black; border:none; font-size:16px;'>Close</button>");
   pageContent += F("</div>");
-  //pageContent += F("<div id='previewModal'>");
-  //pageContent += F("  <pre id='previewContent' style='width: 100%; height: 80%;'></pre><br/>");
-  //pageContent += F("  <button onclick='closePreview()'>Close</button>");
-  //pageContent += F("</div>");
   pageContent += F("<script>");
   pageContent += F("function closePreview() {");
   pageContent += F("  document.getElementById('previewModal').style.display = 'none';");
@@ -2176,9 +2214,10 @@ void displayFiles() {
   }
   pageContent += F("</table>");
   pageContent += F("<form method='POST' action='/upload' enctype='multipart/form-data' style='margin-top:5px;'>");
-  pageContent += F("  <input type='file' name='file' required class='fileMgInput' style='width:235px;'>");
+  pageContent += F("<input type='file' name='file' class='fileMgInput' style='width:235px;' required >");
   pageContent += F("<input type='submit' class='fileMgInput' style='width:60px; vertical-align:middle; margin-left:2px;' value='UPLOAD'>");
   pageContent += F("</form>");
+  pageContent += F("<br/>");
 }
 
 // Output config to serial
@@ -2205,6 +2244,7 @@ void MainPage() {
   siteButtons();
   displayKeys();
   displayFiles();
+  updateControls();
   siteModes();
   siteFooter();
   sendHTMLContent();
@@ -2399,46 +2439,51 @@ void sendHTMLStop() {
   webServer.client().stop();
 }
 
+const char* html_head = R"rawliteral(
+  <head >
+  <meta name='viewport' content='width=device-width, initial-scale=1'>
+  <style>
+  div {width: 350px; margin: 20px auto; text-align: center; border: 3px solid #ff3200; background-color: #555555; left: auto; right: auto;}
+  .header {font-family: Arial, Helvetica, sans-serif; font-size: 20px; color: #ff3200;}
+  .smalltext {font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #ff3200;}
+  .previewModal {display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:400px; background:white; border:2px solid black; padding:10px; z-index:1000;}
+  .previewModal button {margin-top: 5px; margin-right: 10px;}
+  .keyTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; border: 1px solid #ff3200; border-collapse: collapse;}
+  .keyCell {height: 15px; color: #ff3200;}
+  .keyDelCell {height: 15px; width: 45px; background-color: #ff3200; color: black;}
+  .keyDelCell:hover {height: 15px; width: 45px; background-color: #ef2200; color: black; border: 1px solid #000000}
+  .keyDelLink {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; text-decoration: none;}
+  .fileTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; border: 1px solid #ff3200; border-collapse: collapse;}
+  .fileCell {height: 15px; color: #ff3200;}
+  .fileMgCell {height: 15px; width: 45px; background-color: #ff3200; color: black; border: 1px solid #000000}
+  .fileMgCell:hover {height: 15px; width: 45px; background-color: #ef2200; color: black; border: 1px solid #000000}
+  .fileMgLink {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; text-decoration: none;}
+  .fileMgInput {height: 18px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+  .fileMgInput:hover {height: 18px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+  .updateInput {height: 18px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+  .updateInput:hover {height: 18px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+  .uploadBar {width:300px;}
+  .orangeButton {height 30px; width: 49px; auto;background-color: #ff3200; border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
+  .orangeButton:hover {height 30px; width: 49px; background-color: #ef2200; border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
+  .addKeyInput {height 17px; width: 245px;border: 1px solid #ff3200; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black;}
+  .addKeyButton {height 30px; width: 49px; background-color: #ff3200; border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
+  .addKeyButton:hover {height 30px; width: 49px; background-color: #ef2200; border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
+  tr, td {border: 1px solid #ff3200;}
+  button {width: 300px; background-color: #ff3200; border: none; text-decoration: none;}
+  button:hover {width: 300px; background-color: #ef2200; border: none; text-decoration: none;}
+  h1 {font-family: Arial, Helvetica, sans-serif; color: #ff3200;}
+  h3 {font-family: Arial, Helvetica, sans-serif; color: #ff3200;}
+  a {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: #ff3200;}
+  textarea {background-color: #303030; font-size: 11px; width: 300px; height: 50px; resize: vertical; color: #ff3200;}
+  body {background-color: #303030; text-align: center;}
+  </style>
+  </head>
+)rawliteral";
+
 void siteHeader() {
   pageContent  = F("<!DOCTYPE html>");
   pageContent += F("<html>");
-  pageContent += F("<head >");
-  pageContent += F("<meta name='viewport' content='width=device-width, initial-scale=1'>");
-  pageContent += F("<style>");
-
-  //Orange Theme
-  pageContent += F("div {width: 350px; margin: 20px auto; text-align: center; border: 3px solid #ff3200; background-color: #555555; left: auto; right: auto;}");
-  pageContent += F(".header {font-family: Arial, Helvetica, sans-serif; font-size: 20px; color: #ff3200;}");
-  pageContent += F(".smalltext {font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #ff3200;}");
-  pageContent += F("#previewModal {display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:400px; background:white; border:2px solid black; padding:10px; z-index:1000;}");
-  pageContent += F("#previewModal button {margin-top: 5px; margin-right: 10px;}");
-  pageContent += F(".keyTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; border: 1px solid #ff3200; border-collapse: collapse;}");
-  pageContent += F(".keyCell {height: 15px; color: #ff3200;}");
-  pageContent += F(".keyDelCell {height: 15px; width: 45px; background-color: #ff3200; color: black;}");
-  pageContent += F(".keyDelCell:hover {height: 15px; width: 45px; background-color: #ef2200; color: black; border: 1px solid #000000}");
-  pageContent += F(".keyDelLink {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; text-decoration: none;}");
-  pageContent += F(".fileTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; border: 1px solid #ff3200; border-collapse: collapse;}");
-  pageContent += F(".fileCell {height: 15px; color: #ff3200;}");
-  pageContent += F(".fileMgCell {height: 15px; width: 45px; background-color: #ff3200; color: black; border: 1px solid #000000}");
-  pageContent += F(".fileMgCell:hover {height: 15px; width: 45px; background-color: #ef2200; color: black; border: 1px solid #000000}");
-  pageContent += F(".fileMgLink {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; text-decoration: none;}");
-  pageContent += F(".fileMgInput {height: 18px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}");
-  pageContent += F(".fileMgInput:hover {height: 18px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}");
-  pageContent += F(".orangeButton {height 30px; width: 49px; auto;background-color: #ff3200; border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}");
-  pageContent += F(".orangeButton:hover {height 30px; width: 49px; background-color: #ef2200; border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}");
-  pageContent += F(".addKeyInput {height 17px; width: 245px;border: 1px solid #ff3200; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black;}");
-  pageContent += F(".addKeyButton {height 30px; width: 49px; background-color: #ff3200; border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}");
-  pageContent += F(".addKeyButton:hover {height 30px; width: 49px; background-color: #ef2200; border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}");
-  pageContent += F("tr, td {border: 1px solid #ff3200;}");
-  pageContent += F("button {width: 300px; background-color: #ff3200; border: none; text-decoration: none;}");
-  pageContent += F("button:hover {width: 300px; background-color: #ef2200; border: none; text-decoration: none;}");
-  pageContent += F("h1 {font-family: Arial, Helvetica, sans-serif; color: #ff3200;}");
-  pageContent += F("h3 {font-family: Arial, Helvetica, sans-serif; color: #ff3200;}");
-  pageContent += F("a {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: #ff3200;}");
-  pageContent += F("textarea {background-color: #303030; font-size: 11px; width: 300px; height: 50px; resize: vertical; color: #ff3200;}");
-  pageContent += F("body {background-color: #303030; text-align: center;}");
-  pageContent += F("</style>");
-  pageContent += F("</head>");
+  pageContent += (html_head);
   pageContent += F("<body><div><h1>DL32 MENU</h1>");
   pageContent += F("<h3>");
   pageContent += F(config.mqtt_client_name);
@@ -2498,8 +2543,6 @@ void siteButtons() {
   pageContent += F("<a href='/configFFattoSDHTTP'><button>Download config DL32 to SD</button></a>");
   pageContent += F("<br/>");
   pageContent += F("<a href='/purgeConfigHTTP'><button>Purge configuration</button></a>");
-  pageContent += F("<br/>");
-  pageContent += F("<a href='/update'><button>Update firmware</button></a>");
   pageContent += F("<br/><br/>");
   pageContent += F("<a class='header'>IP Addressing</a>");
   if (staticIP) {
@@ -2592,6 +2635,16 @@ void startWebServer() {
     writeKey(webServer.pathArg(0));
     MainPage();
   });
+  webServer.on("/update_post", HTTP_POST, []() {
+    webServer.sendHeader("Connection", "close");
+    if (Update.hasError()) {
+      webServer.send(200, "text/plain", "Update Failed!");
+    } else {
+      webServer.send(200, "text/plain", "Update Successful. Rebooting...");
+      delay(100);
+      ESP.restart();
+    }
+  }, handleUpdateUpload);
   webServer.on(UriRegex("/addKey/[?](1)key[=](1)([0-9a-zA-Z]{4,16})"), HTTP_GET, [&]() {
     Serial.println(webServer.pathArg(0));
     writeKey(webServer.pathArg(0));
@@ -2617,8 +2670,9 @@ void startWebServer() {
       webServer.send(404, "text/plain", "File not found");
     }
   });
-  webServer.on(UriRegex("/deleteFile/([0-9a-zA-Z._-]{3,16})"), HTTP_GET, [&]() {
-    String path = "/" + webServer.pathArg(0);
+  webServer.on(UriRegex("/deleteFile/(.+)"), HTTP_GET, [&]() {
+    String encoded = webServer.pathArg(0);
+    String path = "/" + urlDecode(encoded);
     deleteFile(FFat, path.c_str());
     MainPage();
   });
@@ -2628,11 +2682,9 @@ void startWebServer() {
     executeCommand(webServer.pathArg(0));
     MainPage();
   });
-
   webServer.on("/upload", HTTP_POST, []() {
     MainPage();
   }, handleFileUpload);
-
   webServer.on("/", MainPage);
   webServer.on(UriRegex("/addFormKey/.{0,20}"), HTTP_GET, [&]() {
     Serial.print("Writing key ");
@@ -2641,13 +2693,6 @@ void startWebServer() {
     writeKey(webServer.arg("key"));
     MainPage();
   });
-
-  ElegantOTA.begin(&webServer); // Start ElegantOTA
-  // ElegantOTA callbacks
-  ElegantOTA.onStart(onOTAStart);
-  ElegantOTA.onProgress(onOTAProgress);
-  ElegantOTA.onEnd(onOTAEnd);
-
   webServer.begin();
   if (WiFi.status() == WL_CONNECTED) {
     Serial.print("Web Server started at http://");
@@ -2672,6 +2717,32 @@ void handleFileUpload() {
     }
   }
 }
+
+// --- OTA Functions --- OTA Functions --- OTA Functions --- OTA Functions --- OTA Functions --- OTA Functions --- OTA Functions ---
+
+void handleUpdateUpload() {
+  HTTPUpload& upload = webServer.upload();
+
+  if (upload.status == UPLOAD_FILE_START) {
+    Serial.printf("Starting OTA: %s\n", upload.filename.c_str());
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) { // Explicitly target FLASH
+      Update.printError(Serial);
+    }
+  } 
+  else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+      Update.printError(Serial);
+    }
+  } 
+  else if (upload.status == UPLOAD_FILE_END) {
+    if (Update.end(true)) { // true to set the size automatically
+      Serial.printf("Update Success: %u bytes\nRebooting...\n", upload.totalSize);
+    } else {
+      Update.printError(Serial);
+    }
+  }
+}
+
 
 // --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP ---
 
@@ -2801,7 +2872,6 @@ void loop() {
       //Online Functions
       webServer.handleClient();
       ftpSrv.handleFTP();
-      ElegantOTA.loop();
       if (config.mqtt_enabled) {
         maintainConnnectionMQTT();
         checkMqtt();
