@@ -2263,9 +2263,11 @@ const char* updateScript = R"rawliteral(
 )rawliteral";
 
 const char* updateForm = R"rawliteral(
-  <a class="header">Firmware Update</a><br/>
-  <input type="file" name="file" class="updateInput" id="firmware"  style='width:235px;' required>
-  <button type='button' class='fileMgInput' style='width:60px; vertical-align:middle; margin-left:2px;' onclick='uploadFirmware()'>UPDATE</button>
+  <a class="header">Firmware Update</a>
+  <div class="inputRow">
+    <input type="file" name="file" class="fileMgInputFile" id="firmware" required>
+    <button type="button" class="fileMgInputButton" onclick="uploadFirmware()">UPDATE</button>
+  </div>
   <progress id="progress" class="uploadBar" value="0" max="100" style="visibility: hidden;"></progress><br/>
 )rawliteral";
 
@@ -2329,8 +2331,10 @@ void displayFiles() {
   }
   pageContent += F("</table>");
   pageContent += F("<form method='POST' action='/upload' enctype='multipart/form-data' style='margin-top:5px;'>");
-  pageContent += F("<input type='file' name='file' class='fileMgInput' style='width:235px;' required >");
-  pageContent += F("<input type='submit' class='fileMgInput' style='width:60px; vertical-align:middle; margin-left:2px;' value='UPLOAD'>");
+  pageContent += F("  <div class='inputRow'>");
+  pageContent += F("    <input type='file' name='file' class='fileMgInputFile' required>");
+  pageContent += F("    <input type='submit' class='fileMgInputButton' value='UPLOAD'>");
+  pageContent += F("  </div>");
   pageContent += F("</form>");
   pageContent += F("<br/>");
 }
@@ -2538,7 +2542,7 @@ const char* html_head = R"rawliteral(
   <head >
   <meta name='viewport' content='width=device-width, initial-scale=1'>
   <style>
-  div {width: 350px; margin: 20px auto; text-align: center; border: 3px solid #ff3200; background-color: #555555; left: auto; right: auto;}
+  .mainDiv {width: 350px; margin: 20px auto; text-align: center; border: 3px solid #ff3200; background-color: #555555; left: auto; right: auto;}
   .header {font-family: Arial, Helvetica, sans-serif; font-size: 20px; color: #ff3200;}
   .smalltext {font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #ff3200;}
   .previewModal {display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:400px; background:white; border:2px solid black; padding:10px; z-index:1000;}
@@ -2554,8 +2558,11 @@ const char* html_head = R"rawliteral(
   .fileMgCell {height: 15px; width: 45px; background-color: #ff3200; color: black; border: 1px solid #000000}
   .fileMgCell:hover {height: 15px; width: 45px; background-color: #ef2200; color: black; border: 1px solid #000000}
   .fileMgLink {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; text-decoration: none;}
-  .fileMgInput {height: 18px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-  .fileMgInput:hover {height: 18px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+  .fileMgInputFile {height: 18px; width: 235px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+  .fileMgInputFile:hover {height: 18px; width: 235px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+  .fileMgInputButton {height: 18px; width: 60px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+  .fileMgInputButton:hover {height: 18px; width: 60px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+  .inputRow {display: flex; flex-direction: row; gap: 2px; justify-content: center; align-items: center; border: 0;}
   .updateInput {height: 18px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
   .updateInput:hover {height: 18px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
   .uploadBar {width:300px;}
@@ -2580,7 +2587,7 @@ void siteHeader() {
   pageContent  = F("<!DOCTYPE html>");
   pageContent += F("<html>");
   pageContent += (html_head);
-  pageContent += F("<body><div><h1>DL32 MENU</h1>");
+  pageContent += F("<body><div class='mainDiv'><h1>DL32 MENU</h1>");
   pageContent += F("<h3>");
   pageContent += F(config.mqtt_client_name);
   pageContent += F("</h3>");
