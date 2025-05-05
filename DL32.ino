@@ -2277,7 +2277,7 @@ void updateControls() {
 // Display file management pane
 void displayFiles() {
   pageContent += F("<div id='previewModal' class='previewModal' style='display:none; position:fixed; border:2px solid #000; z-index:1000; overflow:auto;'>");
-  pageContent += F("<pre id='previewContent' class='previewModal' style='max-height:400px; overflow:auto; text-align:left;'></pre>");
+  pageContent += F("<pre id='previewContent' class='previewContent' style='max-height:400px; overflow:auto; text-align:left;'></pre>");
   pageContent += F("<button onclick='closePreview()' style='width:100%; height:40px; background-color:#ff3200; color:black; border:none; font-size:16px;'>Close</button>");
   pageContent += F("</div>");
   pageContent += F("<script>");
@@ -2343,15 +2343,7 @@ void outputConfig() {
   while (outFile.available()) {
     Serial.write(outFile.read());
   }
-  sendHTMLHeader();
-  siteButtons();
-  pageContent += F("<br/> <textarea readonly>Config output to serial.</textarea>");
-  siteModes();
-  siteFooter();
-  sendHTMLContent();
-  sendHTMLStop();
-  outFile.close();
-  Serial.println("\n");
+  MainPage();
 }
 
 void MainPage() {
@@ -2412,24 +2404,12 @@ void garageCloseHTTP() {
 
 void configSDtoFFatHTTP() {
   configSDtoFFat();
-  sendHTMLHeader();
-  siteButtons();
-  displayKeys();
-  siteModes();
-  siteFooter();
-  sendHTMLContent();
-  sendHTMLStop();
+  MainPage();
 }
 
 void configFFattoSDHTTP() {
   configFFattoSD();
-  sendHTMLHeader();
-  siteButtons();
-  displayKeys();
-  siteModes();
-  siteFooter();
-  sendHTMLContent();
-  sendHTMLStop();
+  MainPage();
 }
 
 void keysSDtoFFatHTTP() {
@@ -2563,6 +2543,7 @@ const char* html_head = R"rawliteral(
   .smalltext {font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #ff3200;}
   .previewModal {display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:400px; background:white; border:2px solid black; padding:10px; z-index:1000;}
   .previewModal button {margin-top: 5px; margin-right: 10px;}
+  .previewContent {max-height: 400px; overflow: auto; text-align: left;}
   .keyTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; border: 1px solid #ff3200; border-collapse: collapse;}
   .keyCell {height: 15px; color: #ff3200;}
   .keyDelCell {height: 15px; width: 45px; background-color: #ff3200; color: black;}
@@ -2768,9 +2749,9 @@ void startWebServer() {
     removeKey(webServer.pathArg(0));
     MainPage();
   });
-  webServer.on(UriRegex("/previewFile/([0-9a-zA-Z.]{3,16})"), HTTP_GET, [&]() {
+  webServer.on(UriRegex("/previewFile/([\\w\\.\\-]{1,32})"), HTTP_GET, [&]() {
     previewFile(webServer.pathArg(0));
-    MainPage();
+    //MainPage();
   });
   webServer.on(UriRegex("/downloadFile/([0-9a-zA-Z.\\-_]{3,32})"), HTTP_GET, []() {
     String filename = "/" + webServer.pathArg(0);
