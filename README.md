@@ -32,6 +32,7 @@ Use the below sample dl32.json configuration as a base:
     "mqtt_server": "192.168.1.123",
     "mqtt_topic": "DL32",
     "mqtt_client_name": "DL32",
+    "mqtt_tls": false,
     "mqtt_auth": false,
     "mqtt_user": "mqttuser",
     "mqtt_password": "mqttpass",
@@ -62,9 +63,10 @@ See descriptions of each parameter below:
 - mqtt_server (string) Hostname or IP address of remote mqtt broker
 - mqtt_topic (string, "DEFAULT_dl32s3") mqtt topic base to use for sub topics
 - mqtt_client_name (string, "DEFAULT_dl32s3") Client name to use for mqtt connection
-- mqtt_auth (boolean, false) Dictates whether username/password credentials should be used for mqtt connection
-- mqtt_user (string) Username for mqtt broker connection
-- mqtt_password (string) Password for mqtt broker connection
+- mqtt_tls (boolean, false) Dictates whether connection to the broker uses tls private key authentication (Disregards mqtt_auth, mqtt_user and mqtt_password when true. Requires 3x cert/key files. See doc)
+- mqtt_auth (boolean, false) Dictates whether username/password credentials should be used for mqtt connection. Not valid when mqtt_tls is enabled.
+- mqtt_user (string) Username for mqtt broker connection. Not valid when mqtt_tls is enabled.
+- mqtt_password (string) Password for mqtt broker connection. Not valid when mqtt_tls is enabled.
 - magsr_present (boolean, false) Dictates whether or not a connected magnetic door sensor should be used 
 - ftp_enabled (boolean, false) Dictates whether or not the onboard ftp service is enabled 
 - ftp_user (string) Username for ftp connections
