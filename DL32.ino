@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 29/04/2025
+  Last updated 05/05/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -27,10 +27,10 @@
     CMD DI DIN MOSI 36
     CLK SCLK 38
     DAT0 D0 MISO 35
-    
+
 */
 
-#define codeVersion 20250429
+#define codeVersion 20250505
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -49,7 +49,8 @@
 #include <FFat.h>               // FFAT by espressif https://github.com/espressif/arduino-esp32/blob/master/libraries/FFat
 #include <SD.h>                 // SD by espressif https://github.com/espressif/arduino-esp32/blob/master/libraries/SD
 #include <SimpleFTPServer.h>    // SimpleFTPServer by Renzo Mischianti https://mischianti.org/category/my-libraries/simple-ftp-server/
-#include <Update.h>
+#include <Update.h>             // Update by Hristo Gochkov https://github.com/espressif/arduino-esp32/tree/master/libraries/Update
+#include <WiFiClientSecure.h>   // WifiClientSecure by Evandro Luis Copercini https://git.liberatedsystems.co.uk/jacob.eva/arduino-esp32/src/commit/bcd6dcf5f6f8a4670db53a495ad8c8b556c2a8fa/libraries/WiFiClientSecure
 
 // Hardware Rev 20240812 pins [Since codeVersion 20240819]
 #define buzzer_pin 14
@@ -85,7 +86,7 @@ struct Config {
   char wifi_ssid[32];
   char wifi_password[32];
   bool mqtt_enabled;
-  char mqtt_server[32];
+  char mqtt_server[64];
   int mqtt_port;
   char mqtt_topic[32];
   char mqtt_cmnd_topic[32];
@@ -95,6 +96,7 @@ struct Config {
   char mqtt_uptm_topic[32];
   char mqtt_client_name[32];
   bool mqtt_auth;
+  bool mqtt_tls;
   char mqtt_user[32];
   char mqtt_password[32];
   bool magsr_present;
@@ -112,6 +114,11 @@ struct Config {
   int garageMomentaryDur_Ms;
   int addKeyTimeoutDur_S;
 };
+
+// TLS buffer pointers
+char* ca_cert = nullptr;
+char* client_cert = nullptr;
+char* client_key = nullptr;
 
 // Define struct for storing addressing configuration
 struct Addressing {
@@ -131,8 +138,8 @@ unsigned long lastMsg = 0;
 unsigned long disconCount = 0;
 unsigned long lastMQTTConnectAttempt = 0;
 unsigned long lastWifiConnectAttempt = 0;
-unsigned long wifiReconnectInterval = 60000;
-unsigned long mqttReconnectInterval = 60000;
+unsigned long wifiReconnectInterval = 300000;
+unsigned long mqttReconnectInterval = 300000;
 int add_count = 0;
 int seqTmr = 0;
 int hwRev = 0;
@@ -174,13 +181,14 @@ Adafruit_NeoPixel pixel = Adafruit_NeoPixel(NUMPIXELS, neopix_pin, NEO_GRB + NEO
 Config config;
 Addressing addressing;
 WiFiClient esp32Client;
+WiFiClientSecure esp32Client_tls;
 WebServer webServer(80);
 File uploadFile;
 Wiegand wiegand;
 Ticker secondTick;
 FtpServer ftpSrv;
 PubSubClient MQTTclient(esp32Client);
-
+PubSubClient MQTTclient_tls(esp32Client_tls);
 
 // --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions ---
 
@@ -195,9 +203,11 @@ void ISRwatchdog() {
 // --- Uptime Functions --- Uptime Functions --- Uptime Functions --- Uptime Functions --- Uptime Functions --- Uptime Functions --- Uptime Functions ---
 
 void publishUptime() {
-  if (MQTTclient.connected()) {
-    MQTTclient.publish(config.mqtt_uptm_topic, uptime_formatter::getUptime().c_str());  
-  } 
+  if (config.mqtt_tls && mqttConnected()) {
+    MQTTclient_tls.publish(config.mqtt_uptm_topic, uptime_formatter::getUptime().c_str());
+  } else if (mqttConnected()) {
+    MQTTclient.publish(config.mqtt_uptm_topic, uptime_formatter::getUptime().c_str());
+  }
 }
 
 void printUptime() {
@@ -428,9 +438,11 @@ void checkKey() {
     }
   }
 
-  if (MQTTclient.connected()) {
-    MQTTclient.publish(config.mqtt_keys_topic, scannedKey.c_str());  
-  } 
+  if (config.mqtt_tls && mqttConnected()) {
+    MQTTclient_tls.publish(config.mqtt_keys_topic, scannedKey.c_str());
+  } else if (mqttConnected()) {
+    MQTTclient.publish(config.mqtt_keys_topic, scannedKey.c_str());
+  }
 
   bool match_found = keyAuthorized(scannedKey);
 
@@ -693,11 +705,12 @@ void loadFSJSON_config(const char* config_filename, Config& config) {
   strcat(config.mqtt_uptm_topic, "/uptm");
   strlcpy(config.mqtt_client_name, config_doc["mqtt_client_name"] | "DEFAULT_dl32s3", sizeof(config.mqtt_client_name));
   config.mqtt_auth = config_doc["mqtt_auth"] | false;
+  config.mqtt_tls = config_doc["mqtt_tls"] | false;
   strlcpy(config.mqtt_user, config_doc["mqtt_user"] | "mqtt", sizeof(config.mqtt_user));
   strlcpy(config.mqtt_password, config_doc["mqtt_password"] | "null_mqtt_pass", sizeof(config.mqtt_password));
   config.magsr_present = config_doc["magsr_present"] | false;
   config.ftp_enabled = config_doc["ftp_enabled"] | false;
-  config.ftp_port = 21;
+  config.ftp_port = 21; // current library does not allow argument-defined port
   strlcpy(config.ftp_user, config_doc["ftp_user"] | "null_ftp_user", sizeof(config.ftp_user));
   strlcpy(config.ftp_password, config_doc["ftp_password"] | "null_ftp_pass", sizeof(config.ftp_password));
   config.exitUnlockDur_S = config_doc["exitUnlockDur_S"] | 5;
@@ -1053,7 +1066,11 @@ int connectWifi() {
   Serial.print("\nSuccessfully connected to SSID ");
   Serial.println(config.wifi_ssid);
   if (config.mqtt_enabled) {
-    startMQTTConnection();
+    if (config.mqtt_tls) {
+      startMQTTConnection_tls();
+    } else {
+      startMQTTConnection();
+    }
   }
   return 0;
 }
@@ -1065,7 +1082,7 @@ void unlock(int secs) {
   int count = 0;
   if (garage_mode) {
     Serial.println("Toggle garage door");
-    if (MQTTclient.connected()) {
+    if (mqttConnected()) {
       mqttPublish(config.mqtt_stat_topic, "Toggle garage door");
     }
     setPixGreen();
@@ -1086,7 +1103,7 @@ void unlock(int secs) {
   Serial.print(secs);
   Serial.println(" Seconds");
   setPixGreen();
-  if (MQTTclient.connected()) {
+  if (mqttConnected()) {
     mqttPublish(config.mqtt_stat_topic, "unlocked");
   }
   while (loops < secs) {
@@ -1100,15 +1117,15 @@ void unlock(int secs) {
   } else {
     digitalWrite(lockRelay_pin, HIGH);
   }
-  if (MQTTclient.connected()) {
-    MQTTclient.publish(config.mqtt_stat_topic, "locked", true);
+  if (mqttConnected()) {
+    mqttPublish(config.mqtt_stat_topic, "locked");
   }
 }
 
 void garage_toggle() {
   if (garage_mode) {
     Serial.println("Toggle garage door");
-    if (MQTTclient.connected()) {
+    if (mqttConnected()) {
       mqttPublish(config.mqtt_stat_topic, "Toggle garage door");
     }
     setPixGreen();
@@ -1119,7 +1136,7 @@ void garage_toggle() {
     setPixBlue();
   } else if (garage_mode == false) {
     Serial.println("Unit is not in garage mode.");
-    if (MQTTclient.connected()) {
+    if (mqttConnected()) {
       mqttPublish(config.mqtt_stat_topic, "Unit is not in garage mode.");
     }
   }
@@ -1129,7 +1146,7 @@ void garage_toggle() {
 void garage_open() {
   if (garage_mode && (doorOpen == false)) {
     Serial.println("Opening garage door");
-    if (MQTTclient.connected()) {
+    if (mqttConnected()) {
       mqttPublish(config.mqtt_stat_topic, "Opening garage door");
     }
     setPixGreen();
@@ -1140,12 +1157,12 @@ void garage_open() {
     setPixBlue();
   } else if  (garage_mode && (doorOpen)) {
     Serial.println("Door is already open!");
-    if (MQTTclient.connected()) {
+    if (mqttConnected()) {
       mqttPublish(config.mqtt_stat_topic, "Door is already open!");
     }
   } else if (garage_mode == false) {
     Serial.println("Unit is not in garage mode.");
-    if (MQTTclient.connected()) {
+    if (mqttConnected()) {
       mqttPublish(config.mqtt_stat_topic, "Unit is not in garage mode.");
     }
   }
@@ -1155,7 +1172,7 @@ void garage_open() {
 void garage_close() {
   if ((garage_mode) && (doorOpen)) {
     Serial.println("Closing garage door");
-    if (MQTTclient.connected()) {
+    if (mqttConnected()) {
       mqttPublish(config.mqtt_stat_topic, "Closing garage door");
     }
     setPixGreen();
@@ -1166,12 +1183,12 @@ void garage_close() {
     setPixBlue();
   } else if  (garage_mode && (doorOpen == false)) {
     Serial.println("Door is already closed!");
-    if (MQTTclient.connected()) {
+    if (mqttConnected()) {
       mqttPublish(config.mqtt_stat_topic, "Door is already closed!");
     }
   } else if (garage_mode == false) {
     Serial.println("Unit is not in garage mode.");
-    if (MQTTclient.connected()) {
+    if (mqttConnected()) {
       mqttPublish(config.mqtt_stat_topic, "Unit is not in garage mode.");
     }
   }
@@ -1197,7 +1214,7 @@ int checkExit() {
       Serial.print(count);
       Serial.print("ms");
       Serial.println("");
-      if (MQTTclient.connected()) {
+      if (mqttConnected()) {
         String msg_str = ("Exit Button pressed for " + String(count) + "ms");
         char* msg_char = new char[msg_str.length() + 1];
         msg_str.toCharArray(msg_char, msg_str.length() + 1);
@@ -1227,7 +1244,7 @@ int check0() {
       Serial.print(count);
       Serial.print("ms");
       Serial.println("");
-      if (MQTTclient.connected()) {
+      if (mqttConnected()) {
         String msg_str = ("IO0 pressed for " + String(count) + "ms");
         char* msg_char = new char[msg_str.length() + 1];
         msg_str.toCharArray(msg_char, msg_str.length() + 1);
@@ -1244,7 +1261,7 @@ void checkAUX() {
   if (digitalRead(AUXButton_pin) == LOW) {
     long count = 0;
     Serial.println("AUX Button Pressed");
-    if (MQTTclient.connected()) {
+    if (mqttConnected()) {
       mqttPublish(config.mqtt_stat_topic, "AUX button pressed");
     }
     while (digitalRead(AUXButton_pin) == LOW && (count < 500)) {
@@ -1325,7 +1342,7 @@ void checkBell() {
   if (digitalRead(bellButton_pin) == LOW) {
     Serial.println("");
     Serial.print("Bell Pressed - ");
-    if (MQTTclient.connected()) {
+    if (mqttConnected()) {
       mqttPublish(config.mqtt_stat_topic, "bell pressed");
     }
     ringBell();
@@ -1778,12 +1795,95 @@ void playRandomTone() {
 
 // --- MQTT Functions --- MQTT Functions --- MQTT Functions --- MQTT Functions --- MQTT Functions --- MQTT Functions ---
 
+// Load credentials and apply to WiFiClientSecure instance esp32Client_tls
+bool loadTLSCredentials() {
+  ca_cert = readFileToBuffer("/ca.crt"); // Broker root certificate
+  client_cert = readFileToBuffer("/client.crt"); // Client certificate
+  client_key = readFileToBuffer("/client.key"); // Client private key
+
+  if (!ca_cert || !client_cert || !client_key) {
+    Serial.println("Failed to load one or more TLS credentials.");
+    return false;
+  }
+
+  esp32Client_tls.setCACert(ca_cert);
+  esp32Client_tls.setCertificate(client_cert);
+  esp32Client_tls.setPrivateKey(client_key);
+  Serial.println("TLS credentials loaded successfully.");
+  return true;
+}
+
+// Helper to read certs into heap-allocated buffer
+char* readFileToBuffer(const char* path) {
+  File file = FFat.open(path, "r");
+  if (!file || file.isDirectory()) {
+    Serial.printf("Failed to open %s\n", path);
+    return nullptr;
+  }
+
+  size_t size = file.size();
+  char* buffer = (char*)malloc(size + 1);
+  if (!buffer) {
+    Serial.printf("Failed to allocate memory for %s\n", path);
+    return nullptr;
+  }
+
+  file.readBytes(buffer, size);
+  buffer[size] = '\0';  // Null-terminate
+  file.close();
+  return buffer;
+}
+
+boolean mqttConnected() {
+  if (config.mqtt_tls) {
+    if (MQTTclient_tls.connected()) {
+      return true;
+    } else {
+      return false;
+    }
+  } else {
+    if (MQTTclient.connected()) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+}
+
+boolean mqttPublish(const char* topic, const char* payload) {
+  if (config.mqtt_tls) {
+    if (MQTTclient_tls.connected()) {
+      MQTTclient_tls.publish(topic, payload);
+      return true;
+    } else {
+      return false;
+    }
+  } else {
+    if (MQTTclient.connected()) {
+      MQTTclient.publish(topic, payload);
+      return true;
+    } else {
+      return false;
+    }
+  }
+}
+
 void startMQTTConnection() {
   MQTTclient.setServer(config.mqtt_server, config.mqtt_port);
   MQTTclient.setCallback(MQTTcallback);
   delay(100);
   if (MQTTclient.connected()) {
     MQTTclient.publish(config.mqtt_stat_topic, "locked", true);
+  }
+  lastMQTTConnectAttempt = millis();
+}
+
+void startMQTTConnection_tls() {
+  MQTTclient_tls.setServer(config.mqtt_server, config.mqtt_port);
+  MQTTclient_tls.setCallback(MQTTcallback);
+  delay(100);
+  if (MQTTclient_tls.connected()) {
+    MQTTclient_tls.publish(config.mqtt_stat_topic, "locked", true);
   }
   lastMQTTConnectAttempt = millis();
 }
@@ -1802,7 +1902,7 @@ void MQTTcallback(char* topic, byte* payload, unsigned int length) {
 }
 
 void maintainConnnectionMQTT() {
-  if (!MQTTclient.connected()) {
+  if (!mqttConnected()) {
     if (millis() - lastMQTTConnectAttempt > mqttReconnectInterval) {
       lastMQTTConnectAttempt = millis();
       // Attempt to reconnect
@@ -1818,7 +1918,20 @@ boolean mqttConnect() {
   if (!(config.mqtt_enabled) || (WiFi.status() != WL_CONNECTED)) {
     return false;
   }
-  if (config.mqtt_auth) {
+  if (config.mqtt_tls) {
+    if (MQTTclient_tls.connect(config.mqtt_client_name)) {
+      Serial.println("Connected to MQTT broker ");
+      mqttPublish(config.mqtt_stat_topic, "Connected to MQTT Broker");
+      MQTTclient_tls.subscribe(config.mqtt_cmnd_topic);
+      char IP[] = "xxx.xxx.xxx.xxx";
+      IPAddress ip = WiFi.localIP();
+      ip.toString().toCharArray(IP, 16);
+      Serial.print("Publishing IP address to topic: ");
+      Serial.println(config.mqtt_addr_topic);
+      mqttPublish(config.mqtt_addr_topic, IP);
+      return MQTTclient_tls.connected();
+    }
+  } else if (config.mqtt_auth) {
     if (MQTTclient.connect(config.mqtt_client_name, config.mqtt_user, config.mqtt_password)) {
       Serial.print("Connected to MQTT broker ");
       Serial.print(config.mqtt_server);
@@ -1859,21 +1972,22 @@ boolean mqttConnect() {
 }
 
 void checkMqtt() {
-  if (MQTTclient.connected()) {
-    MQTTclient.loop();
-    unsigned long now = millis();
-    if (now - lastMsg > 2000) {
-      lastMsg = now;
+  if (config.mqtt_tls) {
+    if (MQTTclient_tls.connected()) {
+      MQTTclient_tls.loop();
+      unsigned long now = millis();
+      if (now - lastMsg > 2000) {
+        lastMsg = now;
+      }
     }
-  }
-}
-
-boolean mqttPublish(char* topic, char* payload) {
-  if (MQTTclient.connected()) {
-    MQTTclient.publish(topic, payload);
-    return true;
   } else {
-    return false;
+    if (MQTTclient.connected()) {
+      MQTTclient.loop();
+      unsigned long now = millis();
+      if (now - lastMsg > 2000) {
+        lastMsg = now;
+      }
+    }
   }
 }
 
@@ -1958,8 +2072,8 @@ boolean executeCommand(String command) {
 }
 
 void listCmnds() {
-  if (MQTTclient.connected()) {
-    MQTTclient.publish(config.mqtt_stat_topic, "add_key_mode\ncopy_config_sd_to_ffat\ncopy_keys_sd_to_ffat\ngarage_close\ngarage_open\ngarage_toggle\nlist_commands\nlist_ffat\nlist_keys\nlist_sd\npurge_addressing\npurge_config\npurge_keys\nrestart\nring_bell\nshow_config\nshow_version\nunlock\nuptime");
+  if (mqttConnected()) {
+    mqttPublish(config.mqtt_stat_topic, "add_key_mode\ncopy_config_sd_to_ffat\ncopy_keys_sd_to_ffat\ngarage_close\ngarage_open\ngarage_toggle\nlist_commands\nlist_ffat\nlist_keys\nlist_sd\npurge_addressing\npurge_config\npurge_keys\nrestart\nring_bell\nshow_config\nshow_version\nunlock\nuptime");
   }
   Serial.printf("add_key_mode\ncopy_config_sd_to_ffat\ncopy_keys_sd_to_ffat\ngarage_close\ngarage_open\ngarage_toggle\nlist_commands\nlist_ffat\nlist_keys\nlist_sd\npurge_addressing\npurge_config\npurge_keys\nrestart\nring_bell\nshow_config\nshow_version\nunlock\nuptime");
 }
@@ -2124,6 +2238,7 @@ const char* updateScript = R"rawliteral(
         alert("Please choose a file first!");
         return;
       }
+      document.getElementById("progress").style.visibility='visible';
       var xhr = new XMLHttpRequest();
       xhr.upload.addEventListener("progress", function(evt) {
         if (evt.lengthComputable) {
@@ -2151,7 +2266,7 @@ const char* updateForm = R"rawliteral(
   <a class="header">Firmware Update</a><br/>
   <input type="file" name="file" class="updateInput" id="firmware"  style='width:235px;' required>
   <button type='button' class='fileMgInput' style='width:60px; vertical-align:middle; margin-left:2px;' onclick='uploadFirmware()'>UPDATE</button>
-  <progress id="progress" class="uploadBar" value="0" max="100"></progress><br/>
+  <progress id="progress" class="uploadBar" value="0" max="100" style="visibility: hidden;"></progress><br/>
 )rawliteral";
 
 void updateControls() {
@@ -2255,7 +2370,7 @@ void unlockHTTP() {
   webServer.sendHeader("Location", "/",true);  
   webServer.send(302, "text/plain", "");
   Serial.println("Unlocked via HTTP");
-  if (MQTTclient.connected()) {
+  if (mqttConnected()) {
     mqttPublish(config.mqtt_stat_topic, "HTTP Unlock");
   }  
   unlock(config.httpUnlockDur_S);
@@ -2265,7 +2380,7 @@ void garageToggleHTTP() {
   webServer.sendHeader("Location", "/",true);  
   webServer.send(302, "text/plain", "");
   Serial.println("Garage Door toggled HTTP");
-  if (MQTTclient.connected()) {
+  if (mqttConnected()) {
     mqttPublish(config.mqtt_stat_topic, "Garage Door toggled HTTP");
   }  
   garage_toggle();
@@ -2276,7 +2391,7 @@ void garageOpenHTTP() {
   webServer.send(302, "text/plain", "");
   if (doorOpen == false) {
     Serial.println("Garage Door opened HTTP");
-    if (MQTTclient.connected()) {
+    if (mqttConnected()) {
       mqttPublish(config.mqtt_stat_topic, "Garage Door opened HTTP");
     }  
     garage_open();
@@ -2288,7 +2403,7 @@ void garageCloseHTTP() {
   webServer.send(302, "text/plain", "");
   if (doorOpen) {
     Serial.println("Garage Door closed via HTTP");
-    if (MQTTclient.connected()) {
+    if (mqttConnected()) {
       mqttPublish(config.mqtt_stat_topic, "Garage Door closed via HTTP");
     }
     garage_close();
@@ -2378,7 +2493,7 @@ void saveAddressingStaticHTTP() {
   webServer.sendHeader("Location", "/",true);  
   webServer.send(302, "text/plain", "");
   Serial.println("Saving current addressing to static file");
-  if (MQTTclient.connected()) {
+  if (mqttConnected()) {
     mqttPublish(config.mqtt_stat_topic, "Saving current addressing to static file");
   } 
   JsonDocument addressing_doc;
@@ -2392,7 +2507,7 @@ void saveAddressingStaticHTTP() {
   serializeJsonPretty(addressing_doc, addressing_file);
   addressing_file.close();
   Serial.println("Done. Restarting...");
-  if (MQTTclient.connected()) {
+  if (mqttConnected()) {
     mqttPublish(config.mqtt_stat_topic, "Done. Restarting...");
   } 
   ESP.restart();
@@ -2412,7 +2527,7 @@ void purgeAddressingStaticHTTP() {
   webServer.send(302, "text/plain", "");
   deleteFile(FFat, addressing_filename);
   Serial.println("Static addressing file purged");
-  if (MQTTclient.connected()) {
+  if (mqttConnected()) {
     mqttPublish(config.mqtt_stat_topic, "Static addressing file purged");
   }
   deleteFile(FFat, addressing_filename);
@@ -2492,7 +2607,6 @@ void siteHeader() {
 
 void siteModes() {
   int modeCount = 0;
-  pageContent += F("<br/>");
   pageContent += F("<a class='smalltext'>");
   if (forceOffline) {
     pageContent += F(" [Forced Offline Mode] ");
@@ -2743,7 +2857,6 @@ void handleUpdateUpload() {
   }
 }
 
-
 // --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP ---
 
 void setup() {
@@ -2786,6 +2899,11 @@ void setup() {
   // Should load default config if run for the first time
   Serial.print("Loading configuration...");
   loadFSJSON_config(config_filename, config);
+  if (config.mqtt_tls) {
+    if (!loadTLSCredentials()) {
+      Serial.println("Could not load TLS credentials from FFat.");
+    }
+  }
 
   Serial.print("Loading addressing...");
   loadFSJSON_addressing(addressing_filename, addressing);
