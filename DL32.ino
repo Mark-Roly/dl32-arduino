@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 05/05/2025
+  Last updated 08/05/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250505
+#define codeVersion 20250508
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -51,6 +51,8 @@
 #include <SimpleFTPServer.h>    // SimpleFTPServer by Renzo Mischianti https://mischianti.org/category/my-libraries/simple-ftp-server/
 #include <Update.h>             // Update by Hristo Gochkov https://github.com/espressif/arduino-esp32/tree/master/libraries/Update
 #include <WiFiClientSecure.h>   // WifiClientSecure by Evandro Luis Copercini https://git.liberatedsystems.co.uk/jacob.eva/arduino-esp32/src/commit/bcd6dcf5f6f8a4670db53a495ad8c8b556c2a8fa/libraries/WiFiClientSecure
+#include <vector>
+#include <algorithm>
 
 // Hardware Rev 20240812 pins [Since codeVersion 20240819]
 #define buzzer_pin 14
@@ -115,10 +117,12 @@ struct Config {
   int addKeyTimeoutDur_S;
 };
 
-// TLS buffer pointers
-char* ca_cert = nullptr;
-char* client_cert = nullptr;
-char* client_key = nullptr;
+struct NoteEvent {
+  int tick;
+  note_t note;
+  int octave;
+  int dur;
+};
 
 // Define struct for storing addressing configuration
 struct Addressing {
@@ -165,11 +169,20 @@ String pageContent = "";
 const char* config_filename = "/dl32.json";
 const char* addressing_filename = "/addressing.json";
 const char* keys_filename = "/keys.txt";
+const char* bell_filename = "/current.bell_";
+
+// TLS buffer pointers
+char* ca_cert = nullptr;
+char* client_cert = nullptr;
+char* client_key = nullptr;
 
 // buzzer settings
 int freq = 2000;
 int channel = 0;
 int resolution = 8;
+int tickMs = 5;
+String trackName;
+String bellFile;
 
 // integer for watchdog counter
 volatile int watchdogCount = 0;
@@ -177,7 +190,7 @@ volatile int watchdogCount = 0;
 // Define onboard and offvoard neopixels
 Adafruit_NeoPixel pixel = Adafruit_NeoPixel(NUMPIXELS, neopix_pin, NEO_GRB + NEO_KHZ800);
 
-// instantiate objects for Configuration struct, addressing struct, wifi client, webserver, mqtt client, qiegand reader and WDT timer
+// instantiate objects for Configuration struct, addressing struct, wifi client, webserver, mqtt client, Wiegand reader and WDT timer
 Config config;
 Addressing addressing;
 WiFiClient esp32Client;
@@ -191,6 +204,13 @@ PubSubClient MQTTclient(esp32Client);
 PubSubClient MQTTclient_tls(esp32Client_tls);
 
 // --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions ---
+
+void restart() {
+  Serial.println("Restarting...");
+  mqttPublish(config.mqtt_stat_topic, "Restarting...");
+  delay(1000);
+  ESP.restart();
+}
 
 void ISRwatchdog() {
   watchdogCount++;
@@ -291,7 +311,7 @@ void writeKey(String key) {
     Serial.print("Added key ");
     Serial.print(key);
     Serial.println(" to authorized list");
-    playSuccessTone();
+    playTwinkleUpTone();
   }
 }
 
@@ -669,6 +689,40 @@ void removeDir(fs::FS & fs, const char * path) {
   }
 }
 
+bool copyFileFFat(const char* sourcePath, const char* destinationPath) {
+  File sourceFile = FFat.open(sourcePath, "r");
+  if (!sourceFile) {
+    Serial.print("Failed to open source file: ");
+    Serial.println(sourcePath);
+    return false;
+  }
+
+  File destFile = FFat.open(destinationPath, "w");
+  if (!destFile) {
+    Serial.print("Failed to create destination file: ");
+    Serial.println(destinationPath);
+    sourceFile.close();
+    return false;
+  }
+
+  // Copy contents
+  const size_t bufferSize = 512;
+  uint8_t buffer[bufferSize];
+  size_t bytesRead;
+  while ((bytesRead = sourceFile.read(buffer, bufferSize)) > 0) {
+    destFile.write(buffer, bytesRead);
+  }
+
+  sourceFile.close();
+  destFile.close();
+
+  // Serial.print("Copied ");
+  // Serial.print(sourcePath);
+  // Serial.print(" to ");
+  // Serial.println(destinationPath);
+  return true;
+}
+
 // Loads the configuration from a file
 void loadFSJSON_config(const char* config_filename, Config& config) {
   // Open file for reading
@@ -784,11 +838,9 @@ boolean configSDtoFFat() {
     Serial.println("No SD Card Mounted or no such file");
     return false;
   }
-  playSuccessTone();
+  playTwinkleUpTone();
   Serial.println("Config file successfuly copied from SD to FFat");
-  Serial.println("Restarting...");
-  Serial.print("");
-  ESP.restart();
+  restart();
   return true;
 }
 
@@ -802,7 +854,7 @@ void configFFattoSD() {
     }
     destFile.close();
     sourceFile.close();
-    playSuccessTone();
+    playTwinkleDownTone();
     Serial.println("Config file successfuly copied from FFat to SD");
   } else {
     playUnauthorizedTone();
@@ -829,7 +881,7 @@ void addressingSDtoFFat() {
     return;
   }
   Serial.println("Addressing file successfuly copied from SD to FFat");
-  ESP.restart();
+  restart();
 }
 boolean allSDtoFFat() {
   int copiedFileCount = 0;
@@ -877,12 +929,10 @@ boolean allSDtoFFat() {
     Serial.println(keys_filename);
   }
   if (copiedFileCount > 0) {
-    playSuccessTone();
+    playTwinkleUpTone();
     Serial.print(copiedFileCount);
     Serial.println(" files successfuly copied from SD to FFat");
-    Serial.println("Restarting...");
-    Serial.print("");
-    ESP.restart();
+    restart();
     return true;
   } else {
     playUnauthorizedTone();
@@ -908,7 +958,7 @@ void keysSDtoFFat() {
     Serial.println("No SD Card Mounted or no such file");
     return;
   }
-  playSuccessTone();
+  playTwinkleUpTone();
 }
 
 void keysFFattoSD() {
@@ -921,6 +971,7 @@ void keysFFattoSD() {
     }
     destFile.close();
     sourceFile.close();
+    playTwinkleDownTone();
     Serial.println("Keys file successfuly copied from FFat to SD");
   } else {
     Serial.println("");
@@ -928,13 +979,13 @@ void keysFFattoSD() {
     Serial.println("No SD Card Mounted or no such file");
     return;
   }
-  playSuccessTone();
 }
 
 void addKeyMode() {
   setPixPurple();
   playAddModeTone();
-    Serial.println("Add Key mode - Waiting for key");
+  Serial.println("Add Key mode - Waiting for key");
+  mqttPublish(config.mqtt_stat_topic, "Add Key mode - Waiting for key");
   add_count = 0;
   add_mode = true;
   while (add_count < (config.addKeyTimeoutDur_S * 100) && add_mode) {
@@ -952,13 +1003,13 @@ void addKeyMode() {
       scannedKey = serialCmd;
       writeKey(scannedKey);
     }
-  
     delay(10);
     add_count++;
   }
   if (scannedKey == "") {
     add_mode = false;
     Serial.println("No new key added");
+    mqttPublish(config.mqtt_stat_topic, "No new key added");
   } else {
     Serial.print("scannedKey: ");
   }
@@ -1316,21 +1367,26 @@ void checkAUX() {
     }
     if ((count > 499)&&(count < 1000)) {
       Serial.println("Uploading config, addressing and key files from SD card to FFat...");
+      mqttPublish(config.mqtt_stat_topic, "Uploading config, addressing and key files from SD card to FFat...");
       delay(1000);
       allSDtoFFat();
       delay(1000);
     } else if ((count > 999)&&(count < 1500)) {
       Serial.print("Purging stored keys... ");
+      mqttPublish(config.mqtt_stat_topic, "Purging stored keys...");
       deleteFile(FFat, keys_filename);
       Serial.println("Done");
+      mqttPublish(config.mqtt_stat_topic, "Done");
       delay(1000);
     } else if (count > 1499) {
       Serial.println("Factory resetting device... ");
+      mqttPublish(config.mqtt_stat_topic, "Factory resetting device...");
       deleteFile(FFat, keys_filename);
       deleteFile(FFat, config_filename);
       deleteFile(FFat, addressing_filename);
-      Serial.println("Factory reset complete. Restarting.");
-      ESP.restart();
+      Serial.println("Factory reset complete.");
+      mqttPublish(config.mqtt_stat_topic, "Factory reset complete.");
+      restart();
       delay(3000);
     }
     setPixBlue();
@@ -1373,15 +1429,141 @@ void checkMagSensor() {
 
 // --- Buzzer Functions --- Buzzer Functions --- Buzzer Functions --- Buzzer Functions --- Buzzer Functions --- Buzzer Functions ---
 
-boolean playNote(note_t note, int octave, int dur) {
-  if ((digitalRead(exitButton_pin) == LOW)) {
-    return true;
-  } else {
-    ledcWriteNote(buzzer_pin, note, octave);
-    delay(dur*100);
-    ledcWriteTone(buzzer_pin, 0);
-    return false;
+void loadBellFile() {
+  File file = FFat.open(bell_filename);
+  Serial.print(bell_filename);
+  bellFile = "";
+  if (!file) {
+    Serial.println(" not found. using placeholder tone");
+    bellFile = "Default Tone:1:0 C#4 1 43;1 D4 1 43;2 D#4 1 43;3 E4 1 43;4 C#4 1 43;5 D4 1 43;6 D#4 1 43;7 E4 1 43;8 C#4 1 43;9 D4 1 43;10 D#4 1 43;11 E4 1 43;12 C#4 1 43;13 D4 1 43;14 D#4 1 43;15 E4 1 43;:";
+    return;
   }
+  while (file.available()) {
+    bellFile += (char)file.read();
+  }
+  Serial.println(" loaded");
+  file.close();
+}
+
+boolean setCurrentBell(String selectedBell) {
+  char fullPath[(selectedBell.length()) + 2]; // +1 for '/', +1 for '\0'
+  fullPath[0] = '/';
+  strcpy(fullPath + 1, selectedBell.c_str());  // Copy filename after the '/'
+  if ((FFat.exists(bell_filename))&&(FFat.exists(fullPath))){
+    deleteFile(FFat, bell_filename);
+  }
+  copyFileFFat(fullPath, bell_filename);
+  loadBellFile();
+  return true;
+}
+
+note_t parseNote(const String& noteStr) {
+  if (noteStr == "C")  return NOTE_C;
+  if (noteStr == "C#") return NOTE_Cs;
+  if (noteStr == "D")  return NOTE_D;
+  if (noteStr == "D#") return NOTE_Eb;
+  if (noteStr == "Eb") return NOTE_Eb;
+  if (noteStr == "E")  return NOTE_E;
+  if (noteStr == "F")  return NOTE_F;
+  if (noteStr == "F#") return NOTE_Fs;
+  if (noteStr == "G")  return NOTE_G;
+  if (noteStr == "G#") return NOTE_Gs;
+  if (noteStr == "A")  return NOTE_A;
+  if (noteStr == "A#") return NOTE_Bb;
+  if (noteStr == "Bb") return NOTE_Bb;
+  if (noteStr == "B")  return NOTE_B;
+  return NOTE_C; // default fallback
+}
+
+boolean checkStopBell() {
+  if ((digitalRead(exitButton_pin) == LOW) || (digitalRead(IO0) == LOW) || (digitalRead(AUXButton_pin) == LOW) || (digitalRead(bellButton_pin) == LOW)) {
+    return true;
+  }
+  return false;
+}
+
+// Sorting helper
+bool compareNoteEvents(const NoteEvent& a, const NoteEvent& b) {
+  return a.tick < b.tick;
+}
+
+// Function to translate sequence file to playNote() instances
+void parseAndPlaySequence(const String& sequence) {
+  int firstColon = sequence.indexOf(':');
+  int secondColon = sequence.indexOf(':', firstColon + 1);
+  if (secondColon == -1) return;
+
+  // Extract track name from before the first colon
+  trackName = sequence.substring(0, firstColon);
+
+  Serial.print("Playing track: ");
+  Serial.println(trackName);
+
+  // Extract tickMs value from between the first and second colons
+  String tickStr = sequence.substring(firstColon + 1, secondColon);
+  tickMs = tickStr.toInt();  // Save to existing tickMs variable
+
+  String notesPart = sequence.substring(secondColon + 1);
+  std::vector<NoteEvent> noteEvents;
+  int start = 0;
+  while (start < notesPart.length()) {
+    int end = notesPart.indexOf(';', start);
+    if (end == -1) end = notesPart.length();
+    String noteEntry = notesPart.substring(start, end);
+    noteEntry.trim();
+    if (noteEntry.length() > 0) {
+      int i1 = noteEntry.indexOf(' ');
+      int i2 = noteEntry.indexOf(' ', i1 + 1);
+      int i3 = noteEntry.indexOf(' ', i2 + 1);
+      if (i1 != -1 && i2 != -1 && i3 != -1) {
+        String tickStr  = noteEntry.substring(0, i1);
+        String fullNote = noteEntry.substring(i1 + 1, i2);
+        String durStr   = noteEntry.substring(i2 + 1, i3);
+        // 4th value (instrument code) is ignored
+        int tick = tickStr.toInt();
+        int dur = durStr.toInt();
+        // Parse pitch and octave
+        String pitch = fullNote;
+        int octave = 0;
+        if (isDigit(fullNote.charAt(fullNote.length() - 1))) {
+          octave = fullNote.charAt(fullNote.length() - 1) - '0';
+          pitch = fullNote.substring(0, fullNote.length() - 1);
+        }
+        note_t note = parseNote(pitch);
+        noteEvents.push_back({tick, note, octave, dur});
+      }
+    }
+    start = end + 1;
+  }
+  std::sort(noteEvents.begin(), noteEvents.end(), compareNoteEvents);
+  int currentTick = -1;
+  for (const auto& evt : noteEvents) {
+    if (currentTick != -1 && evt.tick > currentTick) {
+      int tickDelta = evt.tick - currentTick;
+      for(int i=0; i<tickMs; i++) {
+        delay(tickDelta);
+        if (checkStopBell()) {
+          Serial.println("Stopping bell");
+          mqttPublish(config.mqtt_stat_topic, "Stopping bell");
+          return;
+        }
+      }
+    }
+    playNote(evt.note, evt.octave, evt.dur);
+    currentTick = evt.tick;
+  }
+}
+
+void playNote(note_t note, int octave, int dur) {
+  // Serial.print("Playing Note ");
+  // Serial.print(note);
+  // Serial.print(" in octave ");
+  // Serial.print(octave);
+  // Serial.print(" for duration ");
+  // Serial.println(dur);
+  ledcWriteNote(buzzer_pin, note, octave);
+  delay(dur*100);
+  ledcWriteTone(buzzer_pin, 0);
 }
 
 void playBipTone() {
@@ -1394,7 +1576,7 @@ void playBipTone() {
 
 void playUnlockTone() {
   if (digitalRead(DS03) == HIGH) {
-    for (int i = 0; i <= 1; i++) {
+    for (int i=0; i <= 1; i++) {
       ledcWriteTone(buzzer_pin, 5000);
       delay(50);
       ledcWriteTone(buzzer_pin, 0);
@@ -1431,7 +1613,7 @@ void playFactoryTone() {
 
 void playAddModeTone() {
   if (digitalRead(DS03) == HIGH) {
-    for (int i = 0; i <= 2; i++) {
+    for (int i=0; i<=2; i++) {
       ledcWriteTone(buzzer_pin, 6500);
       delay(80);
       ledcWriteTone(buzzer_pin, 0);
@@ -1442,7 +1624,7 @@ void playAddModeTone() {
 
 void playUploadTone() {
   if (digitalRead(DS03) == HIGH) {
-    for (int i = 0; i <= 4; i++) {
+    for (int i=0; i<=4; i++) {
       ledcWriteTone(buzzer_pin, 6500);
       delay(80);
       ledcWriteTone(buzzer_pin, 0);
@@ -1451,7 +1633,7 @@ void playUploadTone() {
   }
 }
 
-void playSuccessTone() {
+void playTwinkleUpTone() {
   if (digitalRead(DS03) == HIGH) {
     ledcWriteTone(buzzer_pin, 2000);
     delay(80);
@@ -1465,303 +1647,26 @@ void playSuccessTone() {
   }
 }
 
+void playTwinkleDownTone() {
+  if (digitalRead(DS03) == HIGH) {
+    ledcWriteTone(buzzer_pin, 8000);
+    delay(80);
+    ledcWriteTone(buzzer_pin, 6000);
+    delay(80);
+    ledcWriteTone(buzzer_pin, 4000);
+    delay(80);
+    ledcWriteTone(buzzer_pin, 2000);
+    delay(80);
+    ledcWriteTone(buzzer_pin, 0);
+  }
+}
+
 void ringBell() {
   if (digitalRead(DS03) == HIGH) {
     Serial.println("Ringing Bell");
-    playRandomTone();
+    mqttPublish(config.mqtt_stat_topic, "Ringing Bell");
+    parseAndPlaySequence(bellFile);
   }
-}
-
-//todo - not working, fix later
-boolean playSeq(int noteBeg, note_t note, int octave, int dur) {
-  if ((digitalRead(exitButton_pin) == LOW)) {
-    seqTmr = 0;
-    return true;
-  } else if (noteBeg == seqTmr) {
-
-    Serial.print("noteBeg = ");
-    Serial.print(noteBeg);
-    Serial.print("   seqTmr = ");
-    Serial.println(seqTmr);
-
-    int loopTmr = seqTmr;
-    Serial.print("time to play ");
-    Serial.print(note);
-    Serial.print(" for ");
-    Serial.println(dur);
-    while (seqTmr < (loopTmr+dur)) {
-      Serial.print(seqTmr);
-      Serial.print(" should be less than ");
-      Serial.println(loopTmr + dur);
-      ledcWriteNote(buzzer_pin, note, octave);
-      delay(dur * 10);
-      ledcWriteTone(buzzer_pin, 0);
-      seqTmr = (seqTmr + dur);
-    }
-  } else {
-  Serial.print(seqTmr);
-  Serial.println(" is not a time to play a note, incrementing");
-  delay(10);
-  seqTmr++;
-  return false;
-  }
-}
-
-void playTwinkle() {
-  if (digitalRead(DS03) == HIGH) {
-    seqTmr = 0;
-    playSeq(0,NOTE_C,5,26);
-    playSeq(4,NOTE_C,5,26);
-    playSeq(8,NOTE_G,5,26);
-    playSeq(12,NOTE_G,5,26);
-    playSeq(16,NOTE_A,5,26);
-  }
-}
-
-void playTwinkleDown() {
-  if (digitalRead(DS03) == HIGH) {
-    seqTmr = 0;
-    playSeq(16,NOTE_A,5,26);
-    playSeq(12,NOTE_G,5,26);
-    playSeq(8,NOTE_G,5,26);
-    playSeq(4,NOTE_C,5,26);
-    playSeq(0,NOTE_C,5,26); 
-  }
-}
-
-void playBowserTheme() {
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_C, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_Eb, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_C, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_Eb, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_C, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_C, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_C, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_C, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_F, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_Fs, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_F, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_E, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_F, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_E, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_Eb, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_E, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_F, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_Fs, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_F, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_E, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_F, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_E, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_Eb, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_E, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_C, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_Eb, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_C, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_Eb, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_G, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_C, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_C, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_C, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_D, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_Cs, 6, 1)) return;
-  if (playNote(NOTE_Fs, 5, 1)) return;
-  if (playNote(NOTE_C, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_F, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_Fs, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_F, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_E, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_F, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_E, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_Eb, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_E, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_F, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_Fs, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_F, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_E, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_F, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_E, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_Eb, 6, 1)) return;
-  if (playNote(NOTE_Bb, 5, 1)) return;
-  if (playNote(NOTE_E, 6, 1)) return;
-}
-
-void playGreensleves() {
-  if (playNote(NOTE_A, 4, 4)) return;
-  if (playNote(NOTE_C, 5, 8)) return;
-  if (playNote(NOTE_D, 5, 4)) return;
-  if (playNote(NOTE_E, 5, 6)) return;
-  if (playNote(NOTE_F, 5, 2)) return;
-  if (playNote(NOTE_E, 5, 4)) return;
-  if (playNote(NOTE_D, 5, 8)) return;
-  if (playNote(NOTE_B, 4, 4)) return;
-  if (playNote(NOTE_G, 4, 6)) return;
-  if (playNote(NOTE_A, 4, 2)) return;
-  if (playNote(NOTE_B, 4, 4)) return;
-  if (playNote(NOTE_C, 5, 8)) return;
-  if (playNote(NOTE_A, 4, 4)) return;
-  if (playNote(NOTE_A, 4, 6)) return;
-  if (playNote(NOTE_Gs, 4, 2)) return;
-  if (playNote(NOTE_A, 4, 4)) return;
-  if (playNote(NOTE_B, 4, 8)) return;
-  if (playNote(NOTE_Gs, 4, 4)) return;
-  if (playNote(NOTE_E, 4, 8)) return;
-  if (playNote(NOTE_A, 4, 4)) return;
-  if (playNote(NOTE_C, 5, 8)) return;
-  if (playNote(NOTE_D, 5, 4)) return;
-  if (playNote(NOTE_E, 5, 6)) return;
-  if (playNote(NOTE_F, 5, 2)) return;
-  if (playNote(NOTE_E, 5, 4)) return;
-  if (playNote(NOTE_D, 5, 8)) return;
-  if (playNote(NOTE_B, 4, 4)) return;
-  if (playNote(NOTE_G, 4, 6)) return;
-  if (playNote(NOTE_A, 4, 2)) return;
-  if (playNote(NOTE_B, 4, 4)) return;
-  if (playNote(NOTE_C, 5, 6)) return;
-  if (playNote(NOTE_B, 4, 2)) return;
-  if (playNote(NOTE_A, 4, 4)) return;
-  if (playNote(NOTE_Gs, 4, 6)) return;
-  if (playNote(NOTE_Fs, 4, 2)) return;
-  if (playNote(NOTE_Gs, 4, 4)) return;
-  if (playNote(NOTE_A, 4, 20)) return;
 }
 
 void playGeigerTone() {
@@ -1778,8 +1683,8 @@ void playGeigerTone() {
 void playRandomTone() {
   if (digitalRead(DS03) == HIGH) {
     Serial.println("Ringing bell");
-    for (int i = 0; i <= 3; i++) {
-      for (int i = 0; i <= 25; i++) {
+    for (int i=0; i<=3; i++) {
+      for (int i=0; i<=25; i++) {
         ledcWriteTone(buzzer_pin, random(500, 10000));
         delay(100);
         if (digitalRead(exitButton_pin) == LOW) {
@@ -1893,7 +1798,7 @@ void MQTTcallback(char* topic, byte* payload, unsigned int length) {
   Serial.print("Message arrived TOPIC:[");
   Serial.print(topic);
   Serial.print("] PAYLOAD:");
-  for (int i = 0; i < length; i++) {
+  for (int i=0; i<length; i++) {
     Serial.print((char)payload[i]);
   }
   Serial.println();
@@ -2042,11 +1947,9 @@ boolean executeCommand(String command) {
   } else if (command.equals("show_version")) {
     Serial.println(codeVersion);
   } else if (command.equals("restart")) {
-    Serial.println("Restarting device...");
-    ESP.restart();
+    restart();
   } else if (command.equals("reboot")) {
-    Serial.println("Restarting device...");
-    ESP.restart();
+    restart();
   } else if (command.equals("unlock")) {
     unlock(config.cmndUnlockDur_S);
   } else if (command.equals("uptime")) {
@@ -2148,7 +2051,7 @@ void downloadKeysHTTP() {
   sendHTMLStop();
 }
 
-// Download copy of config file (config.json)
+// Download copy of config file
 void downloadConfigHTTP() {
   int result = FFat_file_download(config_filename);
   sendHTMLHeader();
@@ -2192,9 +2095,7 @@ void restartESPHTTP() {
   webServer.sendHeader("Location", "/",true);  
   webServer.send(302, "text/plain", "");
   delay(1000);
-  Serial.println("Restarting ESP...");
-  Serial.println("\n");
-  ESP.restart();
+  restart();
 }
 
 // Display allowed keys in webUI
@@ -2229,6 +2130,35 @@ void displayKeys() {
   pageContent += F("<br/>");
   
 }
+
+void bellSelect() {
+  pageContent += F("<a class='header'>Bell Melody</a>");
+  pageContent += F("<div class='inputRow'>");
+  pageContent += F("<form action='/setFormBell/' method='get'>");
+  pageContent += F("<select class='targetBell' name='targetBell'>");
+  pageContent += F("<option value='");
+  pageContent += F(bell_filename);
+  pageContent += F("'>[Select bell melody]</option>");
+  File root = FFat.open("/");
+  File file = root.openNextFile();
+  while (file) {
+    String fileName = file.name();
+    if (fileName.endsWith(".bell")) {
+      pageContent += F("<option value='");
+      pageContent += (fileName);
+      pageContent += F("'>");
+      pageContent += (fileName);
+      pageContent += F("</option>");
+    }
+    file = root.openNextFile();
+  }
+  pageContent += F("    </select>");
+  pageContent += F("    <input class='targetBellButton' type='submit' value='SELECT'>");
+  pageContent += F("</form>");
+  pageContent += F("</div>");
+  pageContent += F("<br/>");
+}
+
 
 const char* updateScript = R"rawliteral(
   <script>
@@ -2354,6 +2284,7 @@ void MainPage() {
   sendHTMLHeader();
   siteButtons();
   displayKeys();
+  bellSelect();
   displayFiles();
   updateControls();
   siteModes();
@@ -2490,11 +2421,7 @@ void saveAddressingStaticHTTP() {
   File addressing_file = FFat.open(addressing_filename, FILE_WRITE);
   serializeJsonPretty(addressing_doc, addressing_file);
   addressing_file.close();
-  Serial.println("Done. Restarting...");
-  if (mqttConnected()) {
-    mqttPublish(config.mqtt_stat_topic, "Done. Restarting...");
-  } 
-  ESP.restart();
+  restart();
 }
 
 void downloadAddressingStaticHTTP() {
@@ -2539,54 +2466,58 @@ void sendHTMLStop() {
 }
 
 const char* html_head = R"rawliteral(
-  <head >
-  <meta name='viewport' content='width=device-width, initial-scale=1'>
-  <style>
-  .mainDiv {width: 350px; margin: 20px auto; text-align: center; border: 3px solid #ff3200; background-color: #555555; left: auto; right: auto;}
-  .header {font-family: Arial, Helvetica, sans-serif; font-size: 20px; color: #ff3200;}
-  .smalltext {font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #ff3200;}
-  .previewModal {display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:400px; background:white; border:2px solid black; padding:10px; z-index:1000;}
-  .previewModal button {margin-top: 5px; margin-right: 10px;}
-  .previewContent {max-height: 400px; overflow: auto; text-align: left;}
-  .keyTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; border: 1px solid #ff3200; border-collapse: collapse;}
-  .keyCell {height: 15px; color: #ff3200;}
-  .keyDelCell {height: 15px; width: 45px; background-color: #ff3200; color: black;}
-  .keyDelCell:hover {height: 15px; width: 45px; background-color: #ef2200; color: black; border: 1px solid #000000}
-  .keyDelLink {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; text-decoration: none;}
-  .fileTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; border: 1px solid #ff3200; border-collapse: collapse;}
-  .fileCell {height: 15px; color: #ff3200;}
-  .fileMgCell {height: 15px; width: 45px; background-color: #ff3200; color: black; border: 1px solid #000000}
-  .fileMgCell:hover {height: 15px; width: 45px; background-color: #ef2200; color: black; border: 1px solid #000000}
-  .fileMgLink {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; text-decoration: none;}
-  .fileMgInputFile {height: 18px; width: 235px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-  .fileMgInputFile:hover {height: 18px; width: 235px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
-  .fileMgInputButton {height: 18px; width: 60px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-  .fileMgInputButton:hover {height: 18px; width: 60px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
-  .inputRow {display: flex; flex-direction: row; gap: 2px; justify-content: center; align-items: center; border: 0;}
-  .updateInput {height: 18px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-  .updateInput:hover {height: 18px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
-  .uploadBar {width:300px;}
-  .orangeButton {height 30px; width: 49px; auto;background-color: #ff3200; border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
-  .orangeButton:hover {height 30px; width: 49px; background-color: #ef2200; border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
-  .addKeyInput {height 17px; width: 245px;border: 1px solid #ff3200; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black;}
-  .addKeyButton {height 30px; width: 49px; background-color: #ff3200; border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
-  .addKeyButton:hover {height 30px; width: 49px; background-color: #ef2200; border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
-  tr, td {border: 1px solid #ff3200;}
-  button {width: 300px; background-color: #ff3200; border: none; text-decoration: none;}
-  button:hover {width: 300px; background-color: #ef2200; border: none; text-decoration: none;}
-  h1 {font-family: Arial, Helvetica, sans-serif; color: #ff3200;}
-  h3 {font-family: Arial, Helvetica, sans-serif; color: #ff3200;}
-  a {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: #ff3200;}
-  textarea {background-color: #303030; font-size: 11px; width: 300px; height: 50px; resize: vertical; color: #ff3200;}
-  body {background-color: #303030; text-align: center;}
-  </style>
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta name='viewport' content='width=device-width, initial-scale=1'>
+    <style>
+      .mainDiv {width: 350px; margin: 20px auto; text-align: center; border: 3px solid #ff3200; background-color: #555555; left: auto; right: auto;}
+      .header {font-family: Arial, Helvetica, sans-serif; font-size: 20px; color: #ff3200;}
+      .smalltext {font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #ff3200;}
+      .previewModal {display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:400px; background:white; border:2px solid black; padding:10px; z-index:1000;}
+      .previewModal button {margin-top: 5px; margin-right: 10px;}
+      .previewContent {max-height: 400px; overflow: auto; text-align: left;}
+      .keyTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; border: 1px solid #ff3200; border-collapse: collapse;}
+      .keyCell {height: 15px; color: #ff3200;}
+      .keyDelCell {height: 15px; width: 45px; background-color: #ff3200; color: black;}
+      .keyDelCell:hover {height: 15px; width: 45px; background-color: #ef2200; color: black; border: 1px solid #000000}
+      .keyDelLink {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; text-decoration: none;}
+      .fileTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; border: 1px solid #ff3200; border-collapse: collapse;}
+      .fileCell {height: 15px; color: #ff3200;}
+      .fileMgCell {height: 15px; width: 45px; background-color: #ff3200; color: black; border: 1px solid #000000}
+      .fileMgCell:hover {height: 15px; width: 45px; background-color: #ef2200; color: black; border: 1px solid #000000}
+      .fileMgLink {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; text-decoration: none;}
+      .fileMgInputFile {height: 18px; width: 235px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .fileMgInputFile:hover {height: 18px; width: 235px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .fileMgInputButton {height: 18px; width: 60px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .fileMgInputButton:hover {height: 18px; width: 60px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .targetBell {height: 18px; width: 235px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .targetBell:hover {height: 18px; width: 235px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .targetBellButton {height: 18px; width: 60px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .targetBellButton:hover {height: 18px; width: 60px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .inputRow {display: flex; flex-direction: row; gap: 2px; justify-content: center; align-items: center; border: 0;}
+      .updateInput {height: 18px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .updateInput:hover {height: 18px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .uploadBar {width:300px;}
+      .orangeButton {height 30px; width: 49px; auto;background-color: #ff3200; border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
+      .orangeButton:hover {height 30px; width: 49px; background-color: #ef2200; border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
+      .addKeyInput {height 17px; width: 245px;border: 1px solid #ff3200; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black;}
+      .addKeyButton {height 30px; width: 49px; background-color: #ff3200; border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
+      .addKeyButton:hover {height 30px; width: 49px; background-color: #ef2200; border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
+      tr, td {border: 1px solid #ff3200;}
+      button {width: 300px; background-color: #ff3200; border: none; text-decoration: none;}
+      button:hover {width: 300px; background-color: #ef2200; border: none; text-decoration: none;}
+      h1 {font-family: Arial, Helvetica, sans-serif; color: #ff3200;}
+      h3 {font-family: Arial, Helvetica, sans-serif; color: #ff3200;}
+      a {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: #ff3200;}
+      textarea {background-color: #303030; font-size: 11px; width: 300px; height: 50px; resize: vertical; color: #ff3200;}
+      body {background-color: #303030; text-align: center;}
+    </style>
   </head>
 )rawliteral";
 
 void siteHeader() {
-  pageContent  = F("<!DOCTYPE html>");
-  pageContent += F("<html>");
-  pageContent += (html_head);
+  pageContent = (html_head);
   pageContent += F("<body><div class='mainDiv'><h1>DL32 MENU</h1>");
   pageContent += F("<h3>");
   pageContent += F(config.mqtt_client_name);
@@ -2733,6 +2664,18 @@ void startWebServer() {
   webServer.on("/downloadAddressingStaticHTTP", downloadAddressingStaticHTTP);
   webServer.on("/addressingStaticSDtoFFatHTTP", addressingStaticSDtoFFatHTTP);
   webServer.on("/purgeAddressingStaticHTTP", purgeAddressingStaticHTTP);
+    webServer.on(UriRegex("/setBell/([\\w\\.\\-]{1,32})"), HTTP_GET, [&]() {
+    Serial.print("Setting bell tone from url ");
+    Serial.println(webServer.pathArg(0));
+    setCurrentBell(webServer.pathArg(0));
+    MainPage();
+  });
+  webServer.on(UriRegex("/setFormBell/.{0,20}"), HTTP_GET, [&]() {
+    Serial.print("Setting bell tone from WebUI");
+    Serial.println(webServer.arg("targetBell"));
+    setCurrentBell(webServer.arg("targetBell"));
+    MainPage();
+  });
   webServer.on(UriRegex("/addKey/([0-9a-zA-Z]{4,8})"), HTTP_GET, [&]() {
     writeKey(webServer.pathArg(0));
     MainPage();
@@ -2744,14 +2687,9 @@ void startWebServer() {
     } else {
       webServer.send(200, "text/plain", "Update Successful. Rebooting...");
       delay(100);
-      ESP.restart();
+      restart();
     }
   }, handleUpdateUpload);
-  webServer.on(UriRegex("/addKey/[?](1)key[=](1)([0-9a-zA-Z]{4,16})"), HTTP_GET, [&]() {
-    Serial.println(webServer.pathArg(0));
-    writeKey(webServer.pathArg(0));
-    MainPage();
-  });
   webServer.on(UriRegex("/remKey/([0-9a-zA-Z]{3,16})"), HTTP_GET, [&]() {
     removeKey(webServer.pathArg(0));
     MainPage();
@@ -2848,7 +2786,6 @@ void handleUpdateUpload() {
 // --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP ---
 
 void setup() {
-  delay(500);
   Serial.begin(115200);
   delay(500);
   Serial.println("");
@@ -2892,7 +2829,8 @@ void setup() {
       Serial.println("Could not load TLS credentials from FFat.");
     }
   }
-
+  Serial.print("Loading bell file...");
+  loadBellFile();
   Serial.print("Loading addressing...");
   loadFSJSON_addressing(addressing_filename, addressing);
 
@@ -2945,8 +2883,7 @@ void setup() {
     }
     if (config.mqtt_enabled) {
       Serial.print("Attempting connection to MQTT broker ");
-      Serial.print(config.mqtt_server);
-      Serial.println("... ");
+      Serial.println(config.mqtt_server);
       mqttConnect();
     }
   } else {
@@ -2972,8 +2909,7 @@ void loop() {
   if (forceOffline == false) {
     if (WiFi.status() == WL_CONNECTED) {
       if (disconCount > 0) {
-        Serial.println("Wifi available - Restarting");
-        ESP.restart();
+        restart();
       }
       //Online Functions
       webServer.handleClient();
