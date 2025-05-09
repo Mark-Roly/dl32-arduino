@@ -380,7 +380,6 @@ void removeKey(String key) {
   }
 }
 
-
 void previewFile(String file) {
   if (FFat_present) {
     String path = "/" + file;
@@ -890,7 +889,7 @@ boolean allSDtoFFat() {
   int copiedFileCount = 0;
 
   // List of file names to loop through
-  String files[] = {config_filename, addressing_filename, keys_filename, bell_filename, caCrt_filename, clCrt_filename, clKey_filename}; //bleh
+  String files[] = {config_filename, addressing_filename, keys_filename, bell_filename, caCrt_filename, clCrt_filename, clKey_filename};
   
   // Get the number of elements in the files array
   int numFiles = sizeof(files) / sizeof(files[0]);
@@ -912,13 +911,6 @@ boolean allSDtoFFat() {
       Serial.println(files[i]);
     }
   }
-
-  
-
-
-  
-
-
   if (copiedFileCount > 0) {
     playTwinkleUpTone();
     Serial.print(copiedFileCount);
@@ -1121,7 +1113,6 @@ int connectWifi() {
 
 void unlock(int secs) {
   int loops = 0;
-  int count = 0;
   if (garage_mode) {
     Serial.println("Toggle garage door");
     if (mqttConnected()) {
@@ -1507,9 +1498,9 @@ void parseAndPlaySequence(const String& sequence) {
       int i2 = noteEntry.indexOf(' ', i1 + 1);
       int i3 = noteEntry.indexOf(' ', i2 + 1);
       if (i1 != -1 && i2 != -1 && i3 != -1) {
-        String tickStr  = noteEntry.substring(0, i1);
+        String tickStr = noteEntry.substring(0, i1);
         String fullNote = noteEntry.substring(i1 + 1, i2);
-        String durStr   = noteEntry.substring(i2 + 1, i3);
+        String durStr = noteEntry.substring(i2 + 1, i3);
         // 4th value (instrument code) is ignored
         int tick = tickStr.toInt();
         int dur = durStr.toInt();
@@ -2039,42 +2030,6 @@ void handleNotFound() {
   webServer.send(404, "text/plain", message);
 }
 
-// Download list of allowed keys
-void downloadKeysHTTP() {
-  int result = FFat_file_download(keys_filename);
-  sendHTMLHeader();
-  siteButtons();
-  if (result == 0) {
-    pageContent += "<br/> <textarea readonly>Downloading keys file</textarea>";
-  } else {
-    pageContent += "<br/> <textarea readonly>Unable to download keys file</textarea>";
-  }
-  siteModes();
-  siteFooter();
-  sendHTMLContent();
-  sendHTMLStop();
-}
-
-// Download copy of config file
-void downloadConfigHTTP() {
-  int result = FFat_file_download(config_filename);
-  sendHTMLHeader();
-  siteButtons();
-  if (result == 0) {
-    pageContent += "<br/> <textarea readonly>Downloading ";
-    pageContent += config_filename; 
-    pageContent += "</textarea>";
-  } else {
-    pageContent += "<br/> <textarea readonly>Unable to download ";
-    pageContent += config_filename;
-    pageContent += "</textarea>";
-  }
-  siteModes();
-  siteFooter();
-  sendHTMLContent();
-  sendHTMLStop();
-}
-
 // Output a list of allowed keys to serial
 void outputKeys() {
   Serial.print("Reading file: ");
@@ -2165,7 +2120,6 @@ void bellSelect() {
   pageContent += "      </div>\n";
   pageContent += "      <br/>\n";
 }
-
 
 const char* updateScript = R"rawliteral(
       <script>
@@ -2432,11 +2386,6 @@ void saveAddressingStaticHTTP() {
   restart();
 }
 
-void downloadAddressingStaticHTTP() {
-  int result = FFat_file_download(addressing_filename);
-  MainPage();
-}
-
 void addressingStaticSDtoFFatHTTP() {
   MainPage();
 }
@@ -2580,7 +2529,9 @@ void siteButtons() {
   pageContent += "      <br/>\n";
   pageContent += "      <br/>\n";
   pageContent += "      <a class='header'>System</a>\n";
-  pageContent += "      <a href='/downloadConfigHTTP'><button>Download config file</button></a>\n";
+  pageContent += "      <a href='/downloadFile";
+  pageContent += config_filename;
+  pageContent += "      '><button>Download config file</button></a>\n";
   pageContent += "      <br/>\n";
   pageContent += "      <a href='/configSDtoFFatHTTP'><button>Upload config SD to DL32</button></a>\n";
   pageContent += "      <br/>\n";
@@ -2590,7 +2541,9 @@ void siteButtons() {
   pageContent += "      <br/><br/>\n";
   pageContent += "      <a class='header'>IP Addressing</a>\n";
   if (staticIP) {
-    pageContent += "      <a href='/downloadAddressingStaticHTTP'><button>Download static addressing file</button></a>\n";
+    pageContent += "      <a href='/downloadFile";
+    pageContent += addressing_filename;
+    pageContent += "      '><button>Download static addressing file</button></a>\n";
     pageContent += "      <br/>\n";
   }
   pageContent += "      <a href='/addressingStaticSDtoFFatHTTP'><button>Upload static addressing SD to DL32</button></a>\n";
@@ -2605,7 +2558,9 @@ void siteButtons() {
   }
   pageContent += "      <br/>\n";
   pageContent += "      <a class='header'>Key Management</a>\n";
-  pageContent += "      <a href='/downloadKeysHTTP'><button>Download key file</button></a>\n";
+  pageContent += "      <a href='/downloadFile";
+  pageContent += keys_filename;
+  pageContent += "      ''><button>Download key file</button></a>\n";
   pageContent += "      <br/>\n";
   pageContent += "      <a href='/keysSDtoFFatHTTP'><button>Upload keys SD to DL32</button></a>\n";
   pageContent += "      <br/>\n";
@@ -2658,13 +2613,11 @@ void startFTPServer() {
 }
 
 void startWebServer() {
-  webServer.on("/downloadKeysHTTP", downloadKeysHTTP);
   webServer.on("/unlockHTTP", unlockHTTP);
   webServer.on("/garageToggleHTTP", garageToggleHTTP);
   webServer.on("/garageOpenHTTP", garageOpenHTTP);
   webServer.on("/garageCloseHTTP", garageCloseHTTP);
   webServer.on("/ringBellHTTP", ringBellHTTP);
-  webServer.on("/downloadConfigHTTP", downloadConfigHTTP);
   webServer.on("/addKeyModeHTTP", addKeyModeHTTP);
   webServer.on("/purgeKeysHTTP", purgeKeysHTTP);
   webServer.on("/purgeConfigHTTP", purgeConfigHTTP);
@@ -2674,7 +2627,6 @@ void startWebServer() {
   webServer.on("/keysSDtoFFatHTTP", keysSDtoFFatHTTP);
   webServer.on("/keysFFattoSDHTTP", keysFFattoSDHTTP);
   webServer.on("/saveAddressingStaticHTTP", saveAddressingStaticHTTP);
-  webServer.on("/downloadAddressingStaticHTTP", downloadAddressingStaticHTTP);
   webServer.on("/addressingStaticSDtoFFatHTTP", addressingStaticSDtoFFatHTTP);
   webServer.on("/purgeAddressingStaticHTTP", purgeAddressingStaticHTTP);
     webServer.on(UriRegex("/setBell/([\\w\\.\\-]{1,32})"), HTTP_GET, [&]() {
