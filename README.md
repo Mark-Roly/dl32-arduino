@@ -83,8 +83,8 @@ See descriptions of each parameter below:
 ```
 
 ### Flashing configuration to the unit
-Insert the SD card into the slot
-With the unit powered on, gold the button labeled AUX for 5 seconds until you hear 5 short beeps and the blue LED turns purple.
-Release the AUX button.
-A successful config flash will result in a *twinkle* sound
+- Insert the SD card into the slot
+- Power the unit on, then hold the button labeled AUX for 5 seconds until you hear 5 short beeps and the blue LED turns purple.
+- Release the AUX button.
+- A successful config flash will result in a *twinkle* sound
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
