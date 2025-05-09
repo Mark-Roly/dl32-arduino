@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 08/05/2025
+  Last updated 09/05/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250508
+#define codeVersion 20250509
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -170,6 +170,9 @@ const char* config_filename = "/dl32.json";
 const char* addressing_filename = "/addressing.json";
 const char* keys_filename = "/keys.txt";
 const char* bell_filename = "/current.bell_";
+const char* caCrt_filename = "/ca.crt";
+const char* clCrt_filename = "/client.crt";
+const char* clKey_filename = "/client.key";;
 
 // TLS buffer pointers
 char* ca_cert = nullptr;
@@ -543,12 +546,13 @@ void receivedDataError(Wiegand::DataError error, uint8_t* rawData, uint8_t rawBi
 // --- SD Functions --- SD Functions --- SD Functions --- SD Functions --- SD Functions --- SD Functions --- SD Functions ---
 
 void sd_setup() {
+  Serial.print("Mounting SD filesystem...");
   SPI.begin(SD_CLK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
   if(!SD.begin(SD_CS_PIN)){
-    Serial.println("SD filesystem mount failed");
+    Serial.println("FAILED");
     return;
   }
-  Serial.println("SD filesystem successfully mounted");
+  Serial.println("OK");
   SD_mounted = true;
 }
 
@@ -569,14 +573,15 @@ void checkSDPresent(int verbose) {
 // --- FATFS Functions --- FATFS Functions --- FATFS Functions --- FATFS Functions --- FATFS Functions --- FATFS Functions --- FATFS Functions ---
 
 void fatfs_setup() {
+  Serial.print("Mounting FFAT filesystem...");
   if (FORMAT_FFAT) {
     FFat.format();
   }  
   if(!FFat.begin(true)){
-    Serial.println("FFAT filesystem mount failed");
+    Serial.println("FAILED");
     return;
   }
-  Serial.println("FFAT filesystem successfully mounted");
+  Serial.println("OK");
   FFat_present = true;
 }
 
@@ -734,11 +739,9 @@ void loadFSJSON_config(const char* config_filename, Config& config) {
   // Deserialize the JSON document
   DeserializationError error = deserializeJson(config_doc, config_file);
   if (error) {
-    Serial.println(F("Failed to read configuration file, using default configuration"));
+    Serial.println(F("FAILED: Using defaults"));
   } else {
-    Serial.print("Found file ");
-    Serial.print(config_filename);
-    Serial.println(" - loading parameters...");
+    Serial.println("OK");
   }
   config.wifi_enabled = config_doc["wifi_enabled"] | false;
   strlcpy(config.wifi_ssid, config_doc["wifi_ssid"] | "null_wifi_ssid", sizeof(config.wifi_ssid));
@@ -782,7 +785,7 @@ void loadFSJSON_config(const char* config_filename, Config& config) {
 // Loads the addressing from a file
 void loadFSJSON_addressing(const char* addressing_filename, Addressing& addressing) {
   if (FFat.exists(addressing_filename) == false) {
-    Serial.println("no static file, using dynamic addressing");
+    Serial.println("FAILED: Using dynamic addressing");
     return;
   }
   // Open file for reading
@@ -796,7 +799,7 @@ void loadFSJSON_addressing(const char* addressing_filename, Addressing& addressi
   // Deserialize the JSON document
   DeserializationError error = deserializeJson(addressing_doc, addressing_file);
   if (error) {
-    Serial.print("Failed to read addressing file: ");
+    Serial.print("FAILED: '");
       switch (error.code()) {
     case DeserializationError::Ok:
         Serial.println("Deserialization succeeded");
@@ -811,7 +814,7 @@ void loadFSJSON_addressing(const char* addressing_filename, Addressing& addressi
         Serial.println("Deserialization failed");
         break;
     }
-    Serial.println("Using dynamic addressing");
+    Serial.println("' - Using dynamic addressing");
     return;
   }
   strlcpy(addressing.localIP, addressing_doc["localIP"] | "false", sizeof(addressing.localIP));
@@ -885,49 +888,37 @@ void addressingSDtoFFat() {
 }
 boolean allSDtoFFat() {
   int copiedFileCount = 0;
-  delay(100);
-  if ((SD_present == true) && (SD.exists(config_filename))) {
-    File sourceFile = SD.open(config_filename);
-    File destFile = FFat.open(config_filename, FILE_WRITE);
-    static uint8_t buf[1];
-    while ( sourceFile.read( buf, 1) ) {
-      destFile.write( buf, 1 );
+
+  // List of file names to loop through
+  String files[] = {config_filename, addressing_filename, keys_filename, bell_filename, caCrt_filename, clCrt_filename, clKey_filename}; //bleh
+  
+  // Get the number of elements in the files array
+  int numFiles = sizeof(files) / sizeof(files[0]);
+
+  // Loop through the files based on the number of elements in the array
+  for (int i=0; i<numFiles; i++) {
+    if ((SD_present == true) && (SD.exists(files[i]))) {
+      File sourceFile = SD.open(files[i]);
+      File destFile = FFat.open(files[i], FILE_WRITE);
+      static uint8_t buf[1];
+      while ( sourceFile.read( buf, 1) ) {
+        destFile.write( buf, 1 );
+      }
+      destFile.close();
+      sourceFile.close();
+      copiedFileCount++;
+    } else {
+      Serial.print("No SD Card Mounted or no such file: ");
+      Serial.println(files[i]);
     }
-    destFile.close();
-    sourceFile.close();
-    copiedFileCount++;
-  } else {
-    Serial.print("No SD Card Mounted or no such file: ");
-    Serial.println(config_filename);
   }
-  if ((SD_present == true) && (SD.exists(addressing_filename))) {
-    File sourceFile = SD.open(addressing_filename);
-    File destFile = FFat.open(addressing_filename, FILE_WRITE);
-    static uint8_t buf[1];
-    while ( sourceFile.read( buf, 1) ) {
-      destFile.write( buf, 1 );
-    }
-    destFile.close();
-    sourceFile.close();
-    copiedFileCount++;
-  } else {
-    Serial.print("No SD Card Mounted or no such file: ");
-    Serial.println(addressing_filename);
-  }
-  if ((SD_present == true) && (SD.exists(keys_filename))) {
-    File sourceFile = SD.open(keys_filename);
-    File destFile = FFat.open(keys_filename, FILE_WRITE);
-    static uint8_t buf[1];
-    while ( sourceFile.read( buf, 1) ) {
-      destFile.write( buf, 1 );
-    }
-    destFile.close();
-    sourceFile.close();
-    copiedFileCount;;
-  } else {
-    Serial.print("No SD Card Mounted or no such file: ");
-    Serial.println(keys_filename);
-  }
+
+  
+
+
+  
+
+
   if (copiedFileCount > 0) {
     playTwinkleUpTone();
     Serial.print(copiedFileCount);
@@ -1021,7 +1012,7 @@ String urlDecode(const String& input) {
   String decoded = "";
   char temp[] = "0x00";
   unsigned int len = input.length();
-  unsigned int i = 0;
+  unsigned int i=0;
 
   while (i < len) {
     char c = input.charAt(i);
@@ -1384,6 +1375,7 @@ void checkAUX() {
       deleteFile(FFat, keys_filename);
       deleteFile(FFat, config_filename);
       deleteFile(FFat, addressing_filename);
+      FFat.format();
       Serial.println("Factory reset complete.");
       mqttPublish(config.mqtt_stat_topic, "Factory reset complete.");
       restart();
@@ -1431,17 +1423,16 @@ void checkMagSensor() {
 
 void loadBellFile() {
   File file = FFat.open(bell_filename);
-  Serial.print(bell_filename);
   bellFile = "";
   if (!file) {
-    Serial.println(" not found. using placeholder tone");
+    Serial.println("FAILED: Using default");
     bellFile = "Default Tone:1:0 C#4 1 43;1 D4 1 43;2 D#4 1 43;3 E4 1 43;4 C#4 1 43;5 D4 1 43;6 D#4 1 43;7 E4 1 43;8 C#4 1 43;9 D4 1 43;10 D#4 1 43;11 E4 1 43;12 C#4 1 43;13 D4 1 43;14 D#4 1 43;15 E4 1 43;:";
     return;
   }
   while (file.available()) {
     bellFile += (char)file.read();
   }
-  Serial.println(" loaded");
+  Serial.println("OK");
   file.close();
 }
 
@@ -1702,19 +1693,19 @@ void playRandomTone() {
 
 // Load credentials and apply to WiFiClientSecure instance esp32Client_tls
 bool loadTLSCredentials() {
-  ca_cert = readFileToBuffer("/ca.crt"); // Broker root certificate
-  client_cert = readFileToBuffer("/client.crt"); // Client certificate
-  client_key = readFileToBuffer("/client.key"); // Client private key
+  Serial.print("Loading TLS credentials...");
+  ca_cert = readFileToBuffer(caCrt_filename); // Broker root certificate
+  client_cert = readFileToBuffer(clCrt_filename); // Client certificate
+  client_key = readFileToBuffer(clKey_filename); // Client private key
 
   if (!ca_cert || !client_cert || !client_key) {
-    Serial.println("Failed to load one or more TLS credentials.");
+    Serial.println("FAILED: One or more TLS credentials invalid or missing");
     return false;
   }
-
   esp32Client_tls.setCACert(ca_cert);
   esp32Client_tls.setCertificate(client_cert);
   esp32Client_tls.setPrivateKey(client_key);
-  Serial.println("TLS credentials loaded successfully.");
+  Serial.println("OK");
   return true;
 }
 
@@ -2020,6 +2011,19 @@ void _transferCallback(FtpTransferOperation ftpOperation, const char* name, unsi
 
 // --- Web Functions --- Web Functions --- Web Functions --- Web Functions --- Web Functions --- Web Functions ---
 
+void removeNewlines(char* str) {
+  int readIndex = 0;
+  int writeIndex = 0;
+
+  while (str[readIndex]) {
+    if (str[readIndex] != '\n' && str[readIndex] != '\r') {
+      str[writeIndex++] = str[readIndex];
+    }
+    readIndex++;
+  }
+  str[writeIndex] = '\0'; // Null-terminate the cleaned string
+}
+
 void handleNotFound() {
   String message = "File Not Found\n\n";
   message += "URI: ";
@@ -2041,9 +2045,9 @@ void downloadKeysHTTP() {
   sendHTMLHeader();
   siteButtons();
   if (result == 0) {
-    pageContent += F("<br/> <textarea readonly>Downloading keys file</textarea>");
+    pageContent += "<br/> <textarea readonly>Downloading keys file</textarea>";
   } else {
-    pageContent += F("<br/> <textarea readonly>Unable to download keys file</textarea>");
+    pageContent += "<br/> <textarea readonly>Unable to download keys file</textarea>";
   }
   siteModes();
   siteFooter();
@@ -2057,13 +2061,13 @@ void downloadConfigHTTP() {
   sendHTMLHeader();
   siteButtons();
   if (result == 0) {
-    pageContent += F("<br/> <textarea readonly>Downloading ");
-    pageContent += F(config_filename); 
-    pageContent += F("</textarea>");
+    pageContent += "<br/> <textarea readonly>Downloading ";
+    pageContent += config_filename; 
+    pageContent += "</textarea>";
   } else {
-    pageContent += F("<br/> <textarea readonly>Unable to download ");
-    pageContent += F(config_filename);
-    pageContent += F("</textarea>");
+    pageContent += "<br/> <textarea readonly>Unable to download ";
+    pageContent += config_filename;
+    pageContent += "</textarea>";
   }
   siteModes();
   siteFooter();
@@ -2081,7 +2085,7 @@ void outputKeys() {
   }
   sendHTMLHeader();
   siteButtons();
-  pageContent += F("<br/> <textarea readonly>Keys output to serial.</textarea>");
+  pageContent += "<br/> <textarea readonly>Keys output to serial.</textarea>";
   siteModes();
   siteFooter();
   sendHTMLContent();
@@ -2100,131 +2104,135 @@ void restartESPHTTP() {
 
 // Display allowed keys in webUI
 void displayKeys() {
-  pageContent += F("<br/> <table class='keyTable'>");
+  pageContent += "      <br/>\n";
+  pageContent += "      <table class='keyTable'>\n";
   char buffer[64];
   int count = 0;
   File keyFile = FFat.open(keys_filename);
   while (keyFile.available()) {
     int l = keyFile.readBytesUntil('\n', buffer, sizeof(buffer));
-    buffer[l] = 0;
-    pageContent += F("<tr><td class='keyCell'>");
-    pageContent += F(buffer);
-    pageContent += F("</td><td class='keyDelCell'>");
-    pageContent += F("<a class='keyDelLink' href='/remKey/");
-    pageContent += F(buffer);
-    pageContent += F("'>DELETE</a>");
-    pageContent += F("</td></tr>");
+    if (l > 0 && buffer[l - 1] == '\r') {
+      buffer[l - 1] = 0; // if it's using Windows line endings, remove that too
+    } else {
+      buffer[l] = 0;
+    }
+    pageContent += "        <tr><td class='keyCell'>";
+    pageContent += buffer;
+    pageContent += "</td><td class='keyDelCell'>";
+    pageContent += "<a class='keyDelLink' href='/remKey/";
+    pageContent += buffer;
+    pageContent += "'>DELETE</a>";
+    pageContent += "</td></tr>\n";
     count++;
   }
   if (count < 1) {
-    pageContent += F("<tr><td class='keyCell'>");
-    pageContent += F("[NO SAVED KEYS]");
-    pageContent += F("</td></tr>");
+    pageContent += "        <tr><td class='keyCell'>[NO SAVED KEYS]</td></tr>\n";
   }
-  pageContent += F("</table>");
+  pageContent += "      </table>\n";
   keyFile.close();
-  pageContent += F("<form action='/addFormKey/' method='get'>");
-  pageContent += F("<input type='text' id='key' name='key' class='addKeyInput'></input>");
-  pageContent += F("<input type='submit' value='ADD' class='addKeyButton' required>");
-  pageContent += F("</form>");
-  pageContent += F("<br/>");
+  pageContent += "      <form action='/addFormKey/' method='get'>\n";
+  pageContent += "        <input type='text' id='key' name='key' class='addKeyInput'></input>\n";
+  pageContent += "        <input type='submit' value='ADD' class='addKeyButton' required>\n";
+  pageContent += "      </form>\n";
+  pageContent += "      <br/>\n";
   
 }
 
 void bellSelect() {
-  pageContent += F("<a class='header'>Bell Melody</a>");
-  pageContent += F("<div class='inputRow'>");
-  pageContent += F("<form action='/setFormBell/' method='get'>");
-  pageContent += F("<select class='targetBell' name='targetBell'>");
-  pageContent += F("<option value='");
-  pageContent += F(bell_filename);
-  pageContent += F("'>[Select bell melody]</option>");
+  pageContent += "      <a class='header'>Bell Melody</a>\n";
+  pageContent += "      <div class='inputRow'>\n";
+  pageContent += "        <form action='/setFormBell/' method='get'>\n";
+  pageContent += "          <select class='targetBell' name='targetBell'>\n";
+  pageContent += "            <option value='";
+  pageContent += bell_filename;
+  pageContent += "'>[Select bell melody]</option>\n";
   File root = FFat.open("/");
   File file = root.openNextFile();
   while (file) {
     String fileName = file.name();
     if (fileName.endsWith(".bell")) {
-      pageContent += F("<option value='");
-      pageContent += (fileName);
-      pageContent += F("'>");
-      pageContent += (fileName);
-      pageContent += F("</option>");
+      pageContent += "          <option value='";
+      pageContent += fileName;
+      pageContent += "'>";
+      pageContent += fileName;
+      pageContent += "</option>\n";
     }
     file = root.openNextFile();
   }
-  pageContent += F("    </select>");
-  pageContent += F("    <input class='targetBellButton' type='submit' value='SELECT'>");
-  pageContent += F("</form>");
-  pageContent += F("</div>");
-  pageContent += F("<br/>");
+  pageContent += "          </select>\n";
+  pageContent += "          <input class='targetBellButton' type='submit' value='SELECT'>\n";
+  pageContent += "        </form>\n";
+  pageContent += "      </div>\n";
+  pageContent += "      <br/>\n";
 }
 
 
 const char* updateScript = R"rawliteral(
-  <script>
-    function uploadFirmware() {
-      var file = document.getElementById("firmware").files[0];
-      if (!file) {
-        alert("Please choose a file first!");
-        return;
-      }
-      document.getElementById("progress").style.visibility='visible';
-      var xhr = new XMLHttpRequest();
-      xhr.upload.addEventListener("progress", function(evt) {
-        if (evt.lengthComputable) {
-          var percent = (evt.loaded / evt.total) * 100;
-          document.getElementById("progress").value = percent;
+      <script>
+        function uploadFirmware() {
+          var file = document.getElementById("firmware").files[0];
+          if (!file) {
+            alert("Please choose a file first!");
+            return;
+          }
+          document.getElementById("progress").style.visibility='visible';
+          var xhr = new XMLHttpRequest();
+          xhr.upload.addEventListener("progress", function(evt) {
+            if (evt.lengthComputable) {
+              var percent = (evt.loaded / evt.total) * 100;
+              document.getElementById("progress").value = percent;
+            }
+          }, false);
+          xhr.open("POST", "/update_post", true);
+          xhr.onload = function () {
+            if (xhr.status == 200) {
+              alert(xhr.responseText);
+              setTimeout(function(){ location.reload(); }, 3000);
+            } else {
+              alert("Error: " + xhr.responseText);
+            }
+          };
+          var formData = new FormData();
+          formData.append("firmware", file);
+          xhr.send(formData);
         }
-      }, false);
-      xhr.open("POST", "/update_post", true);
-      xhr.onload = function () {
-        if (xhr.status == 200) {
-          alert(xhr.responseText);
-          setTimeout(function(){ location.reload(); }, 3000);
-        } else {
-          alert("Error: " + xhr.responseText);
-        }
-      };
-      var formData = new FormData();
-      formData.append("firmware", file);
-      xhr.send(formData);
-    }
-  </script>
+      </script>
 )rawliteral";
 
 const char* updateForm = R"rawliteral(
-  <a class="header">Firmware Update</a>
-  <div class="inputRow">
-    <input type="file" name="file" class="fileMgInputFile" id="firmware" required>
-    <button type="button" class="fileMgInputButton" onclick="uploadFirmware()">UPDATE</button>
-  </div>
-  <progress id="progress" class="uploadBar" value="0" max="100" style="visibility: hidden;"></progress><br/>
+      <a class="header">Firmware Update</a>
+      <div class="inputRow">
+        <input type="file" name="file" class="fileMgInputFile" id="firmware" required>
+        <button type="button" class="fileMgInputButton" onclick="uploadFirmware()">UPDATE</button>
+      </div>
+      <progress id="progress" class="uploadBar" value="0" max="100" style="visibility: hidden;"></progress><br/>
 )rawliteral";
 
 void updateControls() {
-  pageContent += (updateScript);
-  pageContent += (updateForm);
+  pageContent += updateScript;
+  pageContent += updateForm;
 }
 
 // Display file management pane
 void displayFiles() {
-  pageContent += F("<div id='previewModal' class='previewModal' style='display:none; position:fixed; border:2px solid #000; z-index:1000; overflow:auto;'>");
-  pageContent += F("<pre id='previewContent' class='previewContent' style='max-height:400px; overflow:auto; text-align:left;'></pre>");
-  pageContent += F("<button onclick='closePreview()' style='width:100%; height:40px; background-color:#ff3200; color:black; border:none; font-size:16px;'>Close</button>");
-  pageContent += F("</div>");
-  pageContent += F("<script>");
-  pageContent += F("function closePreview() {");
-  pageContent += F("  document.getElementById('previewModal').style.display = 'none';");
-  pageContent += F("}");
-  pageContent += F("async function previewFile(encodedName) {");
-  pageContent += F("  const res = await fetch('/previewFile/' + encodeURIComponent(encodedName));");
-  pageContent += F("  const text = await res.text();");
-  pageContent += F("  document.getElementById('previewContent').innerText = text;");
-  pageContent += F("  document.getElementById('previewModal').style.display = 'block';");
-  pageContent += F("}");
-  pageContent += F("</script>");
-  pageContent += F("<a class='header'>File Management</a>");
-  pageContent += F("<br/> <table class='fileTable'>");
+  pageContent += "      <div id='previewModal' class='previewModal' style='display:none; position:fixed; border:2px solid #000; z-index:1000; overflow:auto;'>\n";
+  pageContent += "        <pre id='previewContent' class='previewContent' style='max-height:400px; overflow:auto; text-align:left;'></pre>\n";
+  pageContent += "        <button onclick='closePreview()' style='width:100%; height:40px; background-color:#ff3200; color:black; border:none; font-size:16px;'>Close</button>\n";
+  pageContent += "      </div>\n";
+  pageContent += "      <script>\n";
+  pageContent += "        function closePreview() {\n";
+  pageContent += "          document.getElementById('previewModal').style.display = 'none';\n";
+  pageContent += "        }\n";
+  pageContent += "        async function previewFile(encodedName) {\n";
+  pageContent += "          const res = await fetch('/previewFile/' + encodeURIComponent(encodedName));\n";
+  pageContent += "          const text = await res.text();\n";
+  pageContent += "          document.getElementById('previewContent').innerText = text;\n";
+  pageContent += "          document.getElementById('previewModal').style.display = 'block';\n";
+  pageContent += "        }\n";
+  pageContent += "      </script>\n";
+  pageContent += "      <a class='header'>File Management</a>\n";
+  pageContent += "      <br/>\n";
+  pageContent += "      <table class='fileTable'>\n";
   int count = 0;
   File root = FFat.open("/");
   File file = root.openNextFile();
@@ -2234,39 +2242,39 @@ void displayFiles() {
       if (name.startsWith("/")) {
         name = name.substring(1);
       }
-      pageContent += F("<tr><td class='fileCell'>");
+      pageContent += "        <tr><td class='fileCell'>";
       pageContent += (name + " (" + String(file.size()) + " bytes)");
-      pageContent += F("</td><td class='fileMgCell'>");
-      pageContent += F("<a class='fileMgLink' href='#' onclick='previewFile(\"");
+      pageContent += "</td><td class='fileMgCell'>";
+      pageContent += "<a class='fileMgLink' href='#' onclick='previewFile(\"";
       pageContent += name;
-      pageContent += F("\")'>VIEW</a>");
-      pageContent += F("</td><td class='fileMgCell'>");
-      pageContent += F("<a class='fileMgLink' href='/downloadFile/");
+      pageContent += "\")'>VIEW</a>";
+      pageContent += "</td><td class='fileMgCell'>";
+      pageContent += "<a class='fileMgLink' href='/downloadFile/";
       pageContent += (name + " ");
-      pageContent += F("'>DLOAD</a>");
-      pageContent += F("</td><td class='fileMgCell'>");
-      pageContent += F("<a class='fileMgLink' href='/deleteFile/");
+      pageContent += "'>DLOAD</a>";
+      pageContent += "</td><td class='fileMgCell'>";
+      pageContent += "<a class='fileMgLink' href='/deleteFile/";
       pageContent += (name + " ");
-      pageContent += F("'>DEL</a>");
-      pageContent += F("</td>");
-      pageContent += F("</tr>");
+      pageContent += "'>DEL</a>";
+      pageContent += "</td>";
+      pageContent += "</tr>\n";
       count++;
     }
     file = root.openNextFile();
   }
   if (count < 1) {
-    pageContent += F("<tr><td class='fileCell'>");
-    pageContent += F("[NO FILES]");
-    pageContent += F("</td></tr>");
+    pageContent += "        <tr><td class='fileCell'>";
+    pageContent += "[NO FILES]";
+    pageContent += "</td></tr>\n";
   }
-  pageContent += F("</table>");
-  pageContent += F("<form method='POST' action='/upload' enctype='multipart/form-data' style='margin-top:5px;'>");
-  pageContent += F("  <div class='inputRow'>");
-  pageContent += F("    <input type='file' name='file' class='fileMgInputFile' required>");
-  pageContent += F("    <input type='submit' class='fileMgInputButton' value='UPLOAD'>");
-  pageContent += F("  </div>");
-  pageContent += F("</form>");
-  pageContent += F("<br/>");
+  pageContent += "      </table>\n";
+  pageContent += "      <form method='POST' action='/upload' enctype='multipart/form-data' style='margin-top:5px;'>\n";
+  pageContent += "        <div class='inputRow'>\n";
+  pageContent += "          <input type='file' name='file' class='fileMgInputFile' required>\n";
+  pageContent += "          <input type='submit' class='fileMgInputButton' value='UPLOAD'>\n";
+  pageContent += "        </div>\n";
+  pageContent += "      </form>\n";
+  pageContent += "      <br/>";
 }
 
 // Output config to serial
@@ -2517,119 +2525,124 @@ const char* html_head = R"rawliteral(
 )rawliteral";
 
 void siteHeader() {
-  pageContent = (html_head);
-  pageContent += F("<body><div class='mainDiv'><h1>DL32 MENU</h1>");
-  pageContent += F("<h3>");
-  pageContent += F(config.mqtt_client_name);
-  pageContent += F("</h3>");
+  pageContent = html_head;
+  pageContent += "  <body>\n";
+  pageContent += "    <div class='mainDiv'>\n";
+  pageContent += "      <h1>DL32 MENU</h1>\n";
+  pageContent += "      <h3>";
+  pageContent += config.mqtt_client_name;
+  pageContent += "      </h3>\n";
 }
 
 void siteModes() {
   int modeCount = 0;
-  pageContent += F("<a class='smalltext'>");
+  pageContent += "      <a class='smalltext'>";
   if (forceOffline) {
-    pageContent += F(" [Forced Offline Mode] ");
+    pageContent += " [Forced Offline Mode] ";
     modeCount++;
   }
   if (failSecure == false) {
-    pageContent += F(" [Failsafe Mode] ");
+    pageContent += " [Failsafe Mode] ";
     modeCount++;
   }
   if (digitalRead(DS03) == LOW) {
-    pageContent += F(" [Silent Mode] ");
+    pageContent += " [Silent Mode] ";
     modeCount++;
   }
   if (garage_mode) {
-    pageContent += F(" [Garage Mode] ");
+    pageContent += " [Garage Mode] ";
     modeCount++;
   }
-  pageContent += F("</a>");
+  pageContent += "</a>\n";
   if (modeCount > 0) {
-    pageContent += F("<br/>");
+    pageContent += "      <br/>\n";
   }
 }
 
 void siteButtons() {
-  pageContent += F("<a class='header'>Device Control</a>");
+  pageContent += "      <a class='header'>Device Control</a>\n";
   if (garage_mode) {
-    pageContent += F("<a href='/garageToggleHTTP'><button>Toggle</button></a>");
-    pageContent += F("<br/>");
+    pageContent += "      <a href='/garageToggleHTTP'><button>Toggle</button></a>\n";
+    pageContent += "      <br/>\n";
     if (doorOpen == false) {
-      pageContent += F("<a href='/garageOpenHTTP'><button>Open</button></a>");
+      pageContent += "      <a href='/garageOpenHTTP'><button>Open</button></a>\n";
     }
     if (doorOpen) {
-      pageContent += F("<a href='/garageCloseHTTP'><button>Close</button></a>");
+      pageContent += "      <a href='/garageCloseHTTP'><button>Close</button></a>\n";
     }
   } else {
-    pageContent += F("<a href='/unlockHTTP'><button>Unlock</button></a>");
+    pageContent += "      <a href='/unlockHTTP'><button>Unlock</button></a>\n";
   }
-  pageContent += F("<br/>");
-  pageContent += F("<a href='/ringBellHTTP'><button>Ring Bell</button></a>");
-  pageContent += F("<br/>");
-  pageContent += F("<a href='/restartESPHTTP'><button>Restart DL32</button></a>");
-  pageContent += F("<br/> <br/>");
-  pageContent += F("<a class='header'>System</a>");
-  pageContent += F("<a href='/downloadConfigHTTP'><button>Download config file</button></a>");
-  pageContent += F("<br/>");
-  pageContent += F("<a href='/configSDtoFFatHTTP'><button>Upload config SD to DL32</button></a>");
-  pageContent += F("<br/>");
-  pageContent += F("<a href='/configFFattoSDHTTP'><button>Download config DL32 to SD</button></a>");
-  pageContent += F("<br/>");
-  pageContent += F("<a href='/purgeConfigHTTP'><button>Purge configuration</button></a>");
-  pageContent += F("<br/><br/>");
-  pageContent += F("<a class='header'>IP Addressing</a>");
+  pageContent += "      <br/>\n";
+  pageContent += "      <a href='/ringBellHTTP'><button>Ring Bell</button></a>\n";
+  pageContent += "      <br/>\n";
+  pageContent += "      <a href='/restartESPHTTP'><button>Restart DL32</button></a>\n";
+  pageContent += "      <br/>\n";
+  pageContent += "      <br/>\n";
+  pageContent += "      <a class='header'>System</a>\n";
+  pageContent += "      <a href='/downloadConfigHTTP'><button>Download config file</button></a>\n";
+  pageContent += "      <br/>\n";
+  pageContent += "      <a href='/configSDtoFFatHTTP'><button>Upload config SD to DL32</button></a>\n";
+  pageContent += "      <br/>\n";
+  pageContent += "      <a href='/configFFattoSDHTTP'><button>Download config DL32 to SD</button></a>\n";
+  pageContent += "      <br/>\n";
+  pageContent += "      <a href='/purgeConfigHTTP'><button>Purge configuration</button></a>\n";
+  pageContent += "      <br/><br/>\n";
+  pageContent += "      <a class='header'>IP Addressing</a>\n";
   if (staticIP) {
-    pageContent += F("<a href='/downloadAddressingStaticHTTP'><button>Download static addressing file</button></a>");
-    pageContent += F("<br/>");
+    pageContent += "      <a href='/downloadAddressingStaticHTTP'><button>Download static addressing file</button></a>\n";
+    pageContent += "      <br/>\n";
   }
-  pageContent += F("<a href='/addressingStaticSDtoFFatHTTP'><button>Upload static addressing SD to DL32</button></a>");
-  pageContent += F("<br/>");
+  pageContent += "      <a href='/addressingStaticSDtoFFatHTTP'><button>Upload static addressing SD to DL32</button></a>\n";
+  pageContent += "      <br/>\n";
   if (staticIP == false) {
-    pageContent += F("<a href='/saveAddressingStaticHTTP'><button>Save current addressing as static</button></a>");
-    pageContent += F("<br/>");
+    pageContent += "      <a href='/saveAddressingStaticHTTP'><button>Save current addressing as static</button></a>\n";
+    pageContent += "      <br/>\n";
   }
   if (staticIP) {
-    pageContent += F("<a href='/purgeAddressingStaticHTTP'><button>Purge static addressing</button></a>");
-    pageContent += F("<br/>");
+    pageContent += "      <a href='/purgeAddressingStaticHTTP'><button>Purge static addressing</button></a>\n";
+    pageContent += "      <br/>\n";
   }
-  pageContent += F("<br/>");
-  pageContent += F("<a class='header'>Key Management</a>");
-  pageContent += F("<a href='/downloadKeysHTTP'><button>Download key file</button></a>");
-  pageContent += F("<br/>");
-  pageContent += F("<a href='/keysSDtoFFatHTTP'><button>Upload keys SD to DL32</button></a>");
-  pageContent += F("<br/>");
-  pageContent += F("<a href='/keysFFattoSDHTTP'><button>Download keys DL32 to SD</button></a>");
-  pageContent += F("<br/>");
-  pageContent += F("<a href='/addKeyModeHTTP'><button>Enter add key mode</button></a>");
-  pageContent += F("<br/>");
+  pageContent += "      <br/>\n";
+  pageContent += "      <a class='header'>Key Management</a>\n";
+  pageContent += "      <a href='/downloadKeysHTTP'><button>Download key file</button></a>\n";
+  pageContent += "      <br/>\n";
+  pageContent += "      <a href='/keysSDtoFFatHTTP'><button>Upload keys SD to DL32</button></a>\n";
+  pageContent += "      <br/>\n";
+  pageContent += "      <a href='/keysFFattoSDHTTP'><button>Download keys DL32 to SD</button></a>\n";
+  pageContent += "      <br/>\n";
+  pageContent += "      <a href='/addKeyModeHTTP'><button>Enter add key mode</button></a>\n";
+  pageContent += "      <br/>\n";
   if (FFat.exists(keys_filename)) {
-    pageContent += F("<a href='/purgeKeysHTTP'><button>Purge stored keys</button></a>");
-    pageContent += F("<br/>");
+    pageContent += "      <a href='/purgeKeysHTTP'><button>Purge stored keys</button></a>\n";
+    pageContent += "      <br/>\n";
   } 
 }
 
 void siteFooter() {
   IPAddress ip_addr = WiFi.localIP();
-  pageContent += F("<a class='smalltext'>");
-  pageContent += F("IP: ");
+  pageContent += "      <a class='smalltext'>";
+  pageContent += "IP: ";
   pageContent += (String(ip_addr[0]) + "." + String(ip_addr[1]) + "." + String(ip_addr[2]) + "." + String(ip_addr[3]));
   if (staticIP) {
-    pageContent += F("<sup>(S)</sup>");
+    pageContent += "<sup>(S)</sup>";
   } else {
-    pageContent += F("<sup>(D)</sup>");
+    pageContent += "<sup>(D)</sup>";
   }
-  pageContent += F("</a>");
-  pageContent += F("&nbsp;&nbsp;&nbsp;&nbsp;");
-  pageContent += F("<a class='smalltext'>");
-  pageContent += F("ver: ");
+  pageContent += "</a>";
+  pageContent += "&nbsp;&nbsp;&nbsp;&nbsp;";
+  pageContent += "<a class='smalltext'>";
+  pageContent += "ver: ";
   pageContent += (String(codeVersion));
-  pageContent += F("&nbsp;&nbsp;&nbsp;&nbsp;");
-  pageContent += F("</a>");
-  pageContent += F("<a class='smalltext' href='https://github.com/Mark-Roly/dl32-arduino' target='_blank' rel='noopener noreferrer'>");
-  pageContent += F("github");
-  pageContent += F("</a>");
-  pageContent += F("<br/><br/></div>");
-  pageContent += F("</body></html>");
+  pageContent += "&nbsp;&nbsp;&nbsp;&nbsp;";
+  pageContent += "</a>";
+  pageContent += "<a class='smalltext' href='https://github.com/Mark-Roly/dl32-arduino' target='_blank' rel='noopener noreferrer'>";
+  pageContent += "github";
+  pageContent += "</a>\n";
+  pageContent += "      <br/><br/>\n";
+  pageContent += "    </div>\n";
+  pageContent += "  </body>\n";
+  pageContent += "</html>\n";
 }
 
 void echoUri() {
@@ -2787,7 +2800,7 @@ void handleUpdateUpload() {
 
 void setup() {
   Serial.begin(115200);
-  delay(500);
+  delay(1000);
   Serial.println("");
   Serial.println("======================");
   Serial.println("|  STARTUP SEQUENCE  |");
