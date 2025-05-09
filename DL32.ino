@@ -243,56 +243,30 @@ void printUptime() {
 boolean keyAuthorized(String key) {
   boolean verboseScanOutput = false;
   File keysFile = FFat.open(keys_filename, "r");
-  int charMatches = 0;
-  char keyBuffer[16];
+  if (!keysFile) {
+    Serial.println("Failed to open keys file.");
+    return false;
+  }
   Serial.print("Checking key: ");
   Serial.println(key);
-  if (verboseScanOutput) {
-    Serial.print("Input Key length: ");
-    Serial.println(key.length());
-  }
   while (keysFile.available()) {
-    int keyDigits = (keysFile.readBytesUntil('\n', keyBuffer, sizeof(keyBuffer))-1);
+    String fileKey = keysFile.readStringUntil('\n');
+    fileKey.trim();  // Removes trailing \r, \n, and spaces
     if (verboseScanOutput) {
-      Serial.print("card digits = ");
-      Serial.println(String(keyDigits));
-      keyBuffer[keyDigits] = 0;
+      Serial.print("Comparing input key [");
+      Serial.print(key);
+      Serial.print("] with file key [");
+      Serial.print(fileKey);
+      Serial.println("]");
     }
-    charMatches = 0;
-    for (int loopCount = 0; loopCount < (keyDigits); loopCount++) {
-      if (verboseScanOutput) {
-        Serial.print("comparing ");
-        Serial.print(key[loopCount]);
-        Serial.print(" with ");
-        Serial.println(keyBuffer[loopCount]);
-      }
-      if (key[loopCount] == keyBuffer[loopCount]) {
-        charMatches++;
-      }
-    }
-    if (verboseScanOutput) {
-      Serial.print("charMatches: ");
-      Serial.println(charMatches);
-      Serial.print("keyDigits: ");
-      Serial.println(keyDigits);
-      Serial.print("Input Key length: ");
-      Serial.println(key.length());
-    }
-    if ((charMatches == keyDigits)&&(keyDigits == key.length())) {
-      if (verboseScanOutput) {
-        Serial.print(keyBuffer);
-        Serial.print(" - ");
-        Serial.println("MATCH");
-      }
+    if (fileKey.equals(key)) {
       keysFile.close();
+      if (verboseScanOutput) Serial.println("MATCH FOUND");
       return true;
-    } else {
-      if (verboseScanOutput) {
-        Serial.println("NO MATCH");
-      }
     }
   }
   keysFile.close();
+  if (verboseScanOutput) Serial.println("NO MATCH");
   return false;
 }
 
@@ -2887,18 +2861,14 @@ void loop() {
     } else {
       if (millis() > (lastWifiConnectAttempt + wifiReconnectInterval)) {
         disconCount = 0;
-
-        Serial.print("millis: ");
-        Serial.println(millis());
-
-        Serial.print("lastWifiConnectAttempt: ");
-        Serial.println(lastWifiConnectAttempt);
-
-        Serial.print("wifiReconnectInterval: ");
-        Serial.println(wifiReconnectInterval);
-
+        // Serial.print("millis: ");
+        // Serial.println(millis());
+        // Serial.print("lastWifiConnectAttempt: ");
+        // Serial.println(lastWifiConnectAttempt);
+        // Serial.print("wifiReconnectInterval: ");
+        // Serial.println(wifiReconnectInterval);
         Serial.println("WiFi reconnection attempt...");
-         connectWifi();
+        connectWifi();
       }
       else if (disconCount == 0) {
         Serial.println("Disconnected from WiFi");
