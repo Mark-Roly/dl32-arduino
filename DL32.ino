@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 09/05/2025
+  Last updated 10/05/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250509
+#define codeVersion 20250510
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -534,6 +534,7 @@ void checkSDPresent(int verbose) {
     SD_present = true;
     if (verbose == 1) {
       Serial.println("SD Card inserted");
+      sd_setup();
     }
   } else if ((SD_present == true) && (digitalRead(SD_CD_PIN) == HIGH)) {
     SD_present = false;
@@ -2758,7 +2759,6 @@ void setup() {
   pinMode(IO0, INPUT_PULLUP);
   digitalWrite(buzzer_pin, LOW);
   Serial.println("OK");
-  checkSDPresent(0);
 
   // Should load default config if run for the first time
   Serial.print("Loading configuration...");
@@ -2865,7 +2865,7 @@ void loop() {
         // Serial.println(millis());
         // Serial.print("lastWifiConnectAttempt: ");
         // Serial.println(lastWifiConnectAttempt);
-        // Serial.print("wifiReconnectInterval: ");
+        // Serial.print("wifiReconnectInterval: ");s
         // Serial.println(wifiReconnectInterval);
         Serial.println("WiFi reconnection attempt...");
         connectWifi();
