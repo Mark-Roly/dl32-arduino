@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 10/05/2025
+  Last updated 13/05/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250510
+#define codeVersion 20250513
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -94,8 +94,6 @@ struct Config {
   char mqtt_cmnd_topic[32];
   char mqtt_stat_topic[32];
   char mqtt_keys_topic[32];
-  char mqtt_addr_topic[32];
-  char mqtt_uptm_topic[32];
   char mqtt_client_name[32];
   bool mqtt_auth;
   bool mqtt_tls;
@@ -136,6 +134,7 @@ struct Addressing {
 // Number of neopixels used
 #define NUMPIXELS 1
 
+// Format FFat on boot?
 #define FORMAT_FFAT false
 
 unsigned long lastMsg = 0;
@@ -223,18 +222,82 @@ void ISRwatchdog() {
   }
 }
 
-// --- Uptime Functions --- Uptime Functions --- Uptime Functions --- Uptime Functions --- Uptime Functions --- Uptime Functions --- Uptime Functions ---
+// --- Stats Functions --- Stats Functions --- Stats Functions --- Stats Functions --- Stats Functions --- Stats Functions --- Stats Functions ---
 
-void publishUptime() {
-  if (config.mqtt_tls && mqttConnected()) {
-    MQTTclient_tls.publish(config.mqtt_uptm_topic, uptime_formatter::getUptime().c_str());
-  } else if (mqttConnected()) {
-    MQTTclient.publish(config.mqtt_uptm_topic, uptime_formatter::getUptime().c_str());
+String formatNumber(long n) {
+  String result = "";
+  String numStr = String(n);
+  int len = numStr.length();
+  int count = 0;
+
+  for (int i = len - 1; i >= 0; i--) {
+    result = numStr[i] + result;
+    count++;
+    if (count == 3 && i != 0) {
+      result = "," + result;
+      count = 0;
+    }
   }
+  return result;
 }
 
-void printUptime() {
-  Serial.println("Uptime: " + uptime_formatter::getUptime());
+void printStats() {
+  String statsPayload;
+  statsPayload += "Hardware revision: " + String(hwRev) + "\n";
+  statsPayload += "Firmware version: " + String(codeVersion) + "\n";
+  statsPayload += "IP address: " + WiFi.localIP().toString() + "\n";
+  statsPayload += "MAC address: " + WiFi.macAddress() + "\n";
+  statsPayload += "Uptime: " + uptime_formatter::getUptime() + "\n";
+  if (digitalRead(SD_CD_PIN) == LOW) {
+    statsPayload += "SD Card present: true\n";
+  } else {
+    statsPayload += "SD Card present: false\n";
+  }
+  statsPayload += "FFat free space: " + formatNumber(FFat.usedBytes()/1024) + "kB of " +  formatNumber(FFat.totalBytes()/1024) + "kB used" + "\n";
+  if (digitalRead(SD_CD_PIN) == LOW) {
+    statsPayload += "SD space: " + formatNumber(SD.usedBytes()/1024) + "kB of " + formatNumber(SD.totalBytes()/1024) + "kB used";
+  }
+  Serial.println(statsPayload);
+}
+
+void statsPanel() {
+  String statsPayload;
+  statsPayload += "Hardware revision: " + String(hwRev) + "\n";
+  statsPayload += "Firmware version: " + String(codeVersion) + "\n";
+  statsPayload += "IP address: " + WiFi.localIP().toString() + "\n";
+  statsPayload += "MAC address: " + WiFi.macAddress() + "\n";
+  statsPayload += "Uptime: " + uptime_formatter::getUptime() + "\n";
+  if (digitalRead(SD_CD_PIN) == LOW) {
+    statsPayload += "SD Card present: true\n";
+  } else {
+    statsPayload += "SD Card present: false\n";
+  }
+  statsPayload += "FFat free space: " + formatNumber(FFat.usedBytes()/1024) + "kB of " +  formatNumber(FFat.totalBytes()/1024) + "kB used" + "\n";
+  if (digitalRead(SD_CD_PIN) == LOW) {
+    statsPayload += "SD space: " + formatNumber(SD.usedBytes()/1024) + "kB of " + formatNumber(SD.totalBytes()/1024) + "kB used" + "\n";
+  }
+  pageContent += "      <textarea class='statsBox' readonly>\n";
+  pageContent += statsPayload;
+  pageContent += "      </textarea><br/>\n";
+}
+
+void publishStats() {
+  String statsPayload;
+  statsPayload += "Hardware revision: " + String(hwRev) + "\n";
+  statsPayload += "Firmware version: " + String(codeVersion) + "\n";
+  statsPayload += "IP address: " + WiFi.localIP().toString() + "\n";
+  statsPayload += "MAC address: " + WiFi.macAddress() + "\n";
+  statsPayload += "Uptime: " + uptime_formatter::getUptime() + "\n";
+  if (digitalRead(SD_CD_PIN) == LOW) {
+    statsPayload += "SD Card present: true\n";
+  } else {
+    statsPayload += "SD Card present: false\n";
+  }
+  statsPayload += "FFat free space: " + formatNumber(FFat.usedBytes()/1024) + "kB of " +  formatNumber(FFat.totalBytes()/1024) + "kB used" + "\n";
+  if (digitalRead(SD_CD_PIN) == LOW) {
+    statsPayload += "SD space: " + formatNumber(SD.usedBytes()/1024) + "kB of " + formatNumber(SD.totalBytes()/1024) + "kB used";
+  }
+  mqttPublish(config.mqtt_stat_topic, statsPayload.c_str());
 }
 
 // --- Wiegand Functions --- Wiegand Functions --- Wiegand Functions --- Wiegand Functions --- Wiegand Functions --- Wiegand Functions --- Wiegand Functions ---
@@ -276,18 +339,21 @@ void writeKey(String key) {
     Serial.print("Key ");
     Serial.print(key);
     Serial.println(" is already authorized");
+    mqttPublish(config.mqtt_stat_topic, "Key is already authorized!");
     playUnauthorizedTone();
   } else if ((key.length() < 3)||(key.length() > 10)) {
     add_mode = false;
     Serial.print("Key ");
     Serial.print(key);
     Serial.println(" is an invalid length");
+    mqttPublish(config.mqtt_stat_topic, "Key is an invalid length");
   } else {
     appendlnFile(FFat, keys_filename, key.c_str());
     add_mode = false;
     Serial.print("Added key ");
     Serial.print(key);
     Serial.println(" to authorized list");
+    mqttPublish(config.mqtt_stat_topic, "Key added authorized to authorized list");
     playTwinkleUpTone();
   }
 }
@@ -325,24 +391,22 @@ void removeKey(String key) {
     writeBuffer += fileKey + "\n";
     if (writeBuffer.length() >= bufferLimit) {
       tempFile.print(writeBuffer); // Dump buffer to file
-      writeBuffer = "";            // Clear buffer
+      writeBuffer = ""; // Clear buffer
     }
   }
-
   // Write any remaining buffer content
   if (writeBuffer.length() > 0) {
     tempFile.print(writeBuffer);
   }
-
   keysFile.close();
   tempFile.close();
-
   if (found) {
     if (FFat.exists("/keys_old")) {
       deleteFile(FFat, "/keys_old");
     }
     renameFile(FFat, keys_filename, "/keys_old");
     renameFile(FFat, "/keys_temp", keys_filename);
+    playTwinkleDownTone();
     Serial.print("Removed key ");
     Serial.print(key);
     Serial.println(" from authorized list.");
@@ -449,17 +513,20 @@ void checkKey() {
     Serial.print("Key ");
     Serial.print(scannedKey);
     Serial.println(" is already authorized!");
+    mqttPublish(config.mqtt_stat_topic, "Key is already authorized!");
     playUnauthorizedTone();
   } else if (match_found and (add_mode == false)) {
     Serial.print("Key ");
     Serial.print(scannedKey);
     Serial.println(" is authorized!");
+    mqttPublish(config.mqtt_stat_topic, "Key is authorized!");
     unlock(config.keyUnlockDur_S);
   } else {
     add_mode = false;
     Serial.print("Key ");
     Serial.print(scannedKey);
     Serial.println(" is unauthorized!");
+    mqttPublish(config.mqtt_stat_topic, "Key is unauthorized!");
     setPixRed();
     playUnauthorizedTone();
     delay(config.badKeyLockoutDur_S*1000);
@@ -727,13 +794,9 @@ void loadFSJSON_config(const char* config_filename, Config& config) {
   strlcpy(config.mqtt_stat_topic, config_doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_stat_topic));
   strlcpy(config.mqtt_cmnd_topic, config_doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_cmnd_topic));
   strlcpy(config.mqtt_keys_topic, config_doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_keys_topic));
-  strlcpy(config.mqtt_addr_topic, config_doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_addr_topic));
-  strlcpy(config.mqtt_uptm_topic, config_doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_uptm_topic));
   strcat(config.mqtt_stat_topic, "/stat");
   strcat(config.mqtt_cmnd_topic, "/cmnd");
   strcat(config.mqtt_keys_topic, "/keys");
-  strcat(config.mqtt_addr_topic, "/addr");
-  strcat(config.mqtt_uptm_topic, "/uptm");
   strlcpy(config.mqtt_client_name, config_doc["mqtt_client_name"] | "DEFAULT_dl32s3", sizeof(config.mqtt_client_name));
   config.mqtt_auth = config_doc["mqtt_auth"] | false;
   config.mqtt_tls = config_doc["mqtt_tls"] | false;
@@ -1060,6 +1123,7 @@ int connectWifi() {
   int count = 0;
   lastWifiConnectAttempt = millis();
   WiFi.begin(config.wifi_ssid, config.wifi_password);
+  WiFi.mode(WIFI_MODE_STA);
   
   while(WiFi.status() != WL_CONNECTED){
     Serial.print(".");
@@ -1267,6 +1331,7 @@ int check0() {
 
 void checkAUX() {
   if (digitalRead(AUXButton_pin) == LOW) {
+    playBipTone();
     long count = 0;
     Serial.println("AUX Button Pressed");
     if (mqttConnected()) {
@@ -1277,24 +1342,8 @@ void checkAUX() {
       delay(10);
     }
     if (count < 499) {
-      Serial.print("Hardware revision: ");
-      Serial.println(hwRev);
-      Serial.print("Code version: ");
-      Serial.println(codeVersion);
-      Serial.print("SD Card present: ");
-      if (digitalRead(SD_CD_PIN)) {
-        Serial.println("false");
-      } else {
-        Serial.println("true");
-      }
-      Serial.print("IP address: ");
-      Serial.println(WiFi.localIP());
-      char IP[] = "xxx.xxx.xxx.xxx";
-      IPAddress ip = WiFi.localIP();
-      ip.toString().toCharArray(IP, 16);
-      mqttPublish(config.mqtt_addr_topic, IP);
-      Serial.println("Uptime: " + uptime_formatter::getUptime());
-      publishUptime();
+      printStats();
+      publishStats();
     }
     if (count > 499) {
       setPixPurple();
@@ -1332,6 +1381,7 @@ void checkAUX() {
       Serial.print("Purging stored keys... ");
       mqttPublish(config.mqtt_stat_topic, "Purging stored keys...");
       deleteFile(FFat, keys_filename);
+      playTwinkleDownTone();
       Serial.println("Done");
       mqttPublish(config.mqtt_stat_topic, "Done");
       delay(1000);
@@ -1342,6 +1392,7 @@ void checkAUX() {
       deleteFile(FFat, config_filename);
       deleteFile(FFat, addressing_filename);
       FFat.format();
+      playTwinkleDownTone();
       Serial.println("Factory reset complete.");
       mqttPublish(config.mqtt_stat_topic, "Factory reset complete.");
       restart();
@@ -1627,11 +1678,12 @@ void ringBell() {
 }
 
 void playGeigerTone() {
+  delay(10); 
   if (digitalRead(DS03) == HIGH) {
     ledcWrite(buzzer_pin, 0);
     for (int i=1; i<20; i++) {
       ledcWriteTone(buzzer_pin, i * 100);
-      delay(10);    
+      delay(13);    
     }
     ledcWrite(buzzer_pin, 0);
   }
@@ -1785,16 +1837,12 @@ boolean mqttConnect() {
       Serial.println("Connected to MQTT broker ");
       mqttPublish(config.mqtt_stat_topic, "Connected to MQTT Broker");
       MQTTclient_tls.subscribe(config.mqtt_cmnd_topic);
-      char IP[] = "xxx.xxx.xxx.xxx";
-      IPAddress ip = WiFi.localIP();
-      ip.toString().toCharArray(IP, 16);
-      Serial.print("Publishing IP address to topic: ");
-      Serial.println(config.mqtt_addr_topic);
-      mqttPublish(config.mqtt_addr_topic, IP);
+      publishStats();
       return MQTTclient_tls.connected();
     }
   } else if (config.mqtt_auth) {
     if (MQTTclient.connect(config.mqtt_client_name, config.mqtt_user, config.mqtt_password)) {
+      MQTTclient.setBufferSize(512);
       Serial.print("Connected to MQTT broker ");
       Serial.print(config.mqtt_server);
       Serial.print(" on port ");
@@ -1803,28 +1851,19 @@ boolean mqttConnect() {
       Serial.println(config.mqtt_client_name);
       mqttPublish(config.mqtt_stat_topic, "Connected to MQTT Broker");
       MQTTclient.subscribe(config.mqtt_cmnd_topic);
-      char IP[] = "xxx.xxx.xxx.xxx";
-      IPAddress ip = WiFi.localIP();
-      ip.toString().toCharArray(IP, 16);
-      Serial.print("Publishing IP address to topic: ");
-      Serial.println(config.mqtt_addr_topic);
-      mqttPublish(config.mqtt_addr_topic, IP);
+      publishStats();
       return MQTTclient.connected();
     }
   } else {
     if (MQTTclient.connect(config.mqtt_client_name)) {
+      MQTTclient_tls.setBufferSize(512);
       Serial.print("Connected to MQTT broker ");
       Serial.print(config.mqtt_server);
       Serial.print(" as ");
       Serial.println(config.mqtt_client_name);
       mqttPublish(config.mqtt_stat_topic, "Connected to MQTT Broker");
       MQTTclient.subscribe(config.mqtt_cmnd_topic);
-      char IP[] = "xxx.xxx.xxx.xxx";
-      IPAddress ip = WiFi.localIP();
-      ip.toString().toCharArray(IP, 16);
-      Serial.print("Publishing IP address to topic: ");
-      Serial.println(config.mqtt_addr_topic);
-      mqttPublish(config.mqtt_addr_topic, IP); 
+      publishStats();
       return MQTTclient.connected();
     }
   }
@@ -1889,12 +1928,19 @@ boolean executeCommand(String command) {
     deleteFile(FFat, addressing_filename);
   } else if (command.equals("purge_keys")) {
     deleteFile(FFat, keys_filename);
+    Serial.println("All authorized keys purged");
+    mqttPublish(config.mqtt_stat_topic, "All authorized keys purged");
+    playTwinkleDownTone();
   } else if (command.equals("purge_config")) {
     deleteFile(FFat, config_filename);
+    playTwinkleDownTone();
   } else if (command.equals("add_key_mode")) {
     addKeyMode();
   } else if (command.equals("ring_bell")) {
     ringBell();
+  } else if (command.equals("stats")) {
+    printStats();
+    publishStats();
   } else if (command.equals("copy_keys_sd_to_ffat")) {
     keysSDtoFFat();
   } else if (command.equals("copy_config_sd_to_ffat")) {
@@ -1909,9 +1955,6 @@ boolean executeCommand(String command) {
     restart();
   } else if (command.equals("unlock")) {
     unlock(config.cmndUnlockDur_S);
-  } else if (command.equals("uptime")) {
-    publishUptime();
-    printUptime();
   } else if ((command.equals("garage_toggle")&& garage_mode)) {
     Serial.println("Toggling garage door");
     mqttPublish(config.mqtt_stat_topic, "Toggling garage door");
@@ -1933,9 +1976,9 @@ boolean executeCommand(String command) {
 
 void listCmnds() {
   if (mqttConnected()) {
-    mqttPublish(config.mqtt_stat_topic, "add_key_mode\ncopy_config_sd_to_ffat\ncopy_keys_sd_to_ffat\ngarage_close\ngarage_open\ngarage_toggle\nlist_commands\nlist_ffat\nlist_keys\nlist_sd\npurge_addressing\npurge_config\npurge_keys\nrestart\nring_bell\nshow_config\nshow_version\nunlock\nuptime");
+    mqttPublish(config.mqtt_stat_topic, "add_key_mode\ncopy_config_sd_to_ffat\ncopy_keys_sd_to_ffat\ngarage_close\ngarage_open\ngarage_toggle\nlist_commands\nlist_ffat\nlist_keys\nlist_sd\npurge_addressing\npurge_config\npurge_keys\nrestart\nring_bell\nshow_config\nshow_version\nstats\nunlock");
   }
-  Serial.printf("add_key_mode\ncopy_config_sd_to_ffat\ncopy_keys_sd_to_ffat\ngarage_close\ngarage_open\ngarage_toggle\nlist_commands\nlist_ffat\nlist_keys\nlist_sd\npurge_addressing\npurge_config\npurge_keys\nrestart\nring_bell\nshow_config\nshow_version\nunlock\nuptime");
+  Serial.printf("add_key_mode\ncopy_config_sd_to_ffat\ncopy_keys_sd_to_ffat\ngarage_close\ngarage_open\ngarage_toggle\nlist_commands\nlist_ffat\nlist_keys\nlist_sd\npurge_addressing\npurge_config\npurge_keys\nrestart\nring_bell\nshow_config\nshow_version\nstats\nunlock");
 }
 
 // --- FTP Functions --- FTP Functions --- FTP Functions --- FTP Functions --- FTP Functions --- FTP Functions ---
@@ -2013,15 +2056,6 @@ void outputKeys() {
   while (outFile.available()) {
     Serial.write(outFile.read());
   }
-  sendHTMLHeader();
-  siteButtons();
-  pageContent += "<br/> <textarea readonly>Keys output to serial.</textarea>";
-  siteModes();
-  siteFooter();
-  sendHTMLContent();
-  sendHTMLStop();
-  outFile.close();
-  Serial.println("\n");
 }
 
 // Restart unit
@@ -2034,7 +2068,7 @@ void restartESPHTTP() {
 
 // Display allowed keys in webUI
 void displayKeys() {
-  pageContent += "      <br/>\n";
+  //pageContent += "      <br/>\n";
   pageContent += "      <table class='keyTable'>\n";
   char buffer[64];
   int count = 0;
@@ -2224,6 +2258,7 @@ void MainPage() {
   bellSelect();
   displayFiles();
   updateControls();
+  statsPanel();
   siteModes();
   siteFooter();
   sendHTMLContent();
@@ -2369,11 +2404,11 @@ void purgeAddressingStaticHTTP() {
   webServer.sendHeader("Location", "/",true);  
   webServer.send(302, "text/plain", "");
   deleteFile(FFat, addressing_filename);
-  Serial.println("Static addressing file purged");
   if (mqttConnected()) {
     mqttPublish(config.mqtt_stat_topic, "Static addressing file purged");
   }
-  deleteFile(FFat, addressing_filename);
+  playTwinkleDownTone();
+  Serial.println("Static addressing file purged");
 }
 
 void sendHTMLHeader() {
@@ -2409,7 +2444,7 @@ const char* html_head = R"rawliteral(
       .previewModal {display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:400px; background:white; border:2px solid black; padding:10px; z-index:1000;}
       .previewModal button {margin-top: 5px; margin-right: 10px;}
       .previewContent {max-height: 400px; overflow: auto; text-align: left;}
-      .keyTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; border: 1px solid #ff3200; border-collapse: collapse;}
+      .keyTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; margin-top: 3px; border: 1px solid #ff3200; border-collapse: collapse;}
       .keyCell {height: 15px; color: #ff3200;}
       .keyDelCell {height: 15px; width: 45px; background-color: #ff3200; color: black;}
       .keyDelCell:hover {height: 15px; width: 45px; background-color: #ef2200; color: black; border: 1px solid #000000}
@@ -2431,6 +2466,7 @@ const char* html_head = R"rawliteral(
       .updateInput {height: 18px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
       .updateInput:hover {height: 18px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
       .uploadBar {width:300px;}
+      .statsBox {background-color: #303030; font-size: 11px; width: 300px; height: 120px; resize: vertical; color: #ff3200;}
       .orangeButton {height 30px; width: 49px; auto;background-color: #ff3200; border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
       .orangeButton:hover {height 30px; width: 49px; background-color: #ef2200; border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
       .addKeyInput {height 17px; width: 245px;border: 1px solid #ff3200; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black;}
@@ -2442,7 +2478,6 @@ const char* html_head = R"rawliteral(
       h1 {font-family: Arial, Helvetica, sans-serif; color: #ff3200;}
       h3 {font-family: Arial, Helvetica, sans-serif; color: #ff3200;}
       a {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: #ff3200;}
-      textarea {background-color: #303030; font-size: 11px; width: 300px; height: 50px; resize: vertical; color: #ff3200;}
       body {background-color: #303030; text-align: center;}
     </style>
   </head>
@@ -2654,6 +2689,7 @@ void startWebServer() {
     String encoded = webServer.pathArg(0);
     String path = "/" + urlDecode(encoded);
     deleteFile(FFat, path.c_str());
+    playTwinkleDownTone();
     MainPage();
   });
   webServer.on(UriRegex("/serial/([0-9a-zA-Z_-]{3,10})"), HTTP_GET, [&]() {
@@ -2664,6 +2700,7 @@ void startWebServer() {
   });
   webServer.on("/upload", HTTP_POST, []() {
     MainPage();
+    playTwinkleUpTone();
   }, handleFileUpload);
   webServer.on("/", MainPage);
   webServer.on(UriRegex("/addFormKey/.{0,20}"), HTTP_GET, [&]() {
@@ -2733,13 +2770,13 @@ void setup() {
   Serial.println("|  STARTUP SEQUENCE  |");
   Serial.println("======================");
   detectHardwareRevision();
-  Serial.print("DL32 firmware version ");
+  Serial.print("Firmware version ");
   Serial.println(codeVersion);
   Serial.print("Initializing WDT...");
   secondTick.attach(1, ISRwatchdog);
   Serial.println("OK");
   fatfs_setup();
-  sd_setup();
+  checkSDPresent(1);
   Serial.print("Configuring GPIO...");
   Serial.flush();
   pinMode(buzzer_pin, OUTPUT);
@@ -2865,7 +2902,7 @@ void loop() {
         // Serial.println(millis());
         // Serial.print("lastWifiConnectAttempt: ");
         // Serial.println(lastWifiConnectAttempt);
-        // Serial.print("wifiReconnectInterval: ");s
+        // Serial.print("wifiReconnectInterval: ");
         // Serial.println(wifiReconnectInterval);
         Serial.println("WiFi reconnection attempt...");
         connectWifi();
