@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 13/05/2025
+  Last updated 14/05/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250513
+#define codeVersion 20250514
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -51,8 +51,8 @@
 #include <SimpleFTPServer.h>    // SimpleFTPServer by Renzo Mischianti https://mischianti.org/category/my-libraries/simple-ftp-server/
 #include <Update.h>             // Update by Hristo Gochkov https://github.com/espressif/arduino-esp32/tree/master/libraries/Update
 #include <WiFiClientSecure.h>   // WifiClientSecure by Evandro Luis Copercini https://git.liberatedsystems.co.uk/jacob.eva/arduino-esp32/src/commit/bcd6dcf5f6f8a4670db53a495ad8c8b556c2a8fa/libraries/WiFiClientSecure
-#include <vector>
-#include <algorithm>
+#include <vector>               // vector library from C++ standard library https://github.com/espressif/arduino-esp32
+#include <algorithm>            // algorithm library from C++ standard library https://github.com/espressif/arduino-esp32
 
 // Hardware Rev 20240812 pins [Since codeVersion 20240819]
 #define buzzer_pin 14
@@ -195,15 +195,15 @@ Adafruit_NeoPixel pixel = Adafruit_NeoPixel(NUMPIXELS, neopix_pin, NEO_GRB + NEO
 // instantiate objects for Configuration struct, addressing struct, wifi client, webserver, mqtt client, Wiegand reader and WDT timer
 Config config;
 Addressing addressing;
-WiFiClient esp32Client;
-WiFiClientSecure esp32Client_tls;
+WiFiClient wifiClient;
+WiFiClientSecure wifiClient_tls;
 WebServer webServer(80);
 File uploadFile;
 Wiegand wiegand;
 Ticker secondTick;
 FtpServer ftpSrv;
-PubSubClient MQTTclient(esp32Client);
-PubSubClient MQTTclient_tls(esp32Client_tls);
+PubSubClient mqttClient(wifiClient);
+PubSubClient mqttClient_tls(wifiClient_tls);
 
 // --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions ---
 
@@ -223,6 +223,20 @@ void ISRwatchdog() {
 }
 
 // --- Stats Functions --- Stats Functions --- Stats Functions --- Stats Functions --- Stats Functions --- Stats Functions --- Stats Functions ---
+
+int rssiToPercent(long rssi) {
+  if (rssi <= -100) return 0;
+  if (rssi >= -50) return 100;
+  return 2 * (rssi + 100);
+}
+
+// Convert RSSI to human-readable signal quality
+String rssiToQuality(long rssi) {
+  if (rssi >= -60) return "Excellent";
+  else if (rssi >= -67) return "Good";
+  else if (rssi >= -75) return "Fair";
+  else return "Weak";
+}
 
 String formatNumber(long n) {
   String result = "";
@@ -247,6 +261,7 @@ void printStats() {
   statsPayload += "Firmware version: " + String(codeVersion) + "\n";
   statsPayload += "IP address: " + WiFi.localIP().toString() + "\n";
   statsPayload += "MAC address: " + WiFi.macAddress() + "\n";
+  statsPayload += "Wifi strength: " + String(WiFi.RSSI()) + "dBm (" + rssiToPercent(WiFi.RSSI()) + "% - " + rssiToQuality(WiFi.RSSI()) + ")" + "\n";
   statsPayload += "Uptime: " + uptime_formatter::getUptime() + "\n";
   if (digitalRead(SD_CD_PIN) == LOW) {
     statsPayload += "SD Card present: true\n";
@@ -265,6 +280,7 @@ void statsPanel() {
   statsPayload += "Hardware revision: " + String(hwRev) + "\n";
   statsPayload += "Firmware version: " + String(codeVersion) + "\n";
   statsPayload += "IP address: " + WiFi.localIP().toString() + "\n";
+  statsPayload += "Wifi strength: " + String(WiFi.RSSI()) + "dBm (" + rssiToPercent(WiFi.RSSI()) + "% - " + rssiToQuality(WiFi.RSSI()) + ")" + "\n";
   statsPayload += "MAC address: " + WiFi.macAddress() + "\n";
   statsPayload += "Uptime: " + uptime_formatter::getUptime() + "\n";
   if (digitalRead(SD_CD_PIN) == LOW) {
@@ -286,6 +302,7 @@ void publishStats() {
   statsPayload += "Hardware revision: " + String(hwRev) + "\n";
   statsPayload += "Firmware version: " + String(codeVersion) + "\n";
   statsPayload += "IP address: " + WiFi.localIP().toString() + "\n";
+  statsPayload += "Wifi strength: " + String(WiFi.RSSI()) + "dBm (" + rssiToPercent(WiFi.RSSI()) + "% - " + rssiToQuality(WiFi.RSSI()) + ")" + "\n";
   statsPayload += "MAC address: " + WiFi.macAddress() + "\n";
   statsPayload += "Uptime: " + uptime_formatter::getUptime() + "\n";
   if (digitalRead(SD_CD_PIN) == LOW) {
@@ -499,9 +516,9 @@ void checkKey() {
   }
 
   if (config.mqtt_tls && mqttConnected()) {
-    MQTTclient_tls.publish(config.mqtt_keys_topic, scannedKey.c_str());
+    mqttClient_tls.publish(config.mqtt_keys_topic, scannedKey.c_str());
   } else if (mqttConnected()) {
-    MQTTclient.publish(config.mqtt_keys_topic, scannedKey.c_str());
+    mqttClient.publish(config.mqtt_keys_topic, scannedKey.c_str());
   }
 
   bool match_found = keyAuthorized(scannedKey);
@@ -1420,7 +1437,7 @@ void checkMagSensor() {
     //send not that door has closed
     doorOpen = false;
     Serial.println("Door Closed");
-    if (MQTTclient.connected()) {
+    if (mqttClient.connected()) {
       mqttPublish(config.mqtt_stat_topic, "door_closed");
     }
     //Serial.print("doorOpen == ");
@@ -1428,7 +1445,7 @@ void checkMagSensor() {
   } else if (doorOpen == false && digitalRead(magSensor_pin) == HIGH && magsr_present) {
     doorOpen = true;
     Serial.println("Door Opened");
-    if (MQTTclient.connected()) {
+    if (mqttClient.connected()) {
       mqttPublish(config.mqtt_stat_topic, "door_opened");
     }
     //Serial.print("doorOpen == ");
@@ -1709,20 +1726,40 @@ void playRandomTone() {
 
 // --- MQTT Functions --- MQTT Functions --- MQTT Functions --- MQTT Functions --- MQTT Functions --- MQTT Functions ---
 
-// Load credentials and apply to WiFiClientSecure instance esp32Client_tls
-bool loadTLSCredentials() {
-  Serial.print("Loading TLS credentials...");
-  ca_cert = readFileToBuffer(caCrt_filename); // Broker root certificate
+// Load credentials and apply to WiFiClientSecure instance wifiClient_tls
+bool loadTLSClient() {
+  Serial.print("Loading TLS client crt and key...");
   client_cert = readFileToBuffer(clCrt_filename); // Client certificate
   client_key = readFileToBuffer(clKey_filename); // Client private key
 
-  if (!ca_cert || !client_cert || !client_key) {
-    Serial.println("FAILED: One or more TLS credentials invalid or missing");
+  if (!client_cert) {
+    Serial.print("FAILED: file ");
+    Serial.print(clCrt_filename);
+    Serial.print("missing or invalid");
+    return false;
+  } else if (!client_key) {
+    Serial.print("FAILED: file ");
+    Serial.print(clKey_filename);
+    Serial.print("missing or invalid");
     return false;
   }
-  esp32Client_tls.setCACert(ca_cert);
-  esp32Client_tls.setCertificate(client_cert);
-  esp32Client_tls.setPrivateKey(client_key);
+  wifiClient_tls.setCertificate(client_cert);
+  wifiClient_tls.setPrivateKey(client_key);
+  Serial.println("OK");
+  return true;
+}
+
+// Load credentials and apply to WiFiClientSecure instance wifiClient_tls
+bool loadTLSCA() {
+  Serial.print("Loading TLS CA certificate...");
+  ca_cert = readFileToBuffer(caCrt_filename); // Broker root certificate
+  if (!ca_cert) {
+    Serial.print("FAILED: file ");
+    Serial.print(caCrt_filename);
+    Serial.print("missing or invalid");
+    return false;
+  }
+  wifiClient_tls.setCACert(ca_cert);
   Serial.println("OK");
   return true;
 }
@@ -1750,13 +1787,13 @@ char* readFileToBuffer(const char* path) {
 
 boolean mqttConnected() {
   if (config.mqtt_tls) {
-    if (MQTTclient_tls.connected()) {
+    if (mqttClient_tls.connected()) {
       return true;
     } else {
       return false;
     }
   } else {
-    if (MQTTclient.connected()) {
+    if (mqttClient.connected()) {
       return true;
     } else {
       return false;
@@ -1766,15 +1803,15 @@ boolean mqttConnected() {
 
 boolean mqttPublish(const char* topic, const char* payload) {
   if (config.mqtt_tls) {
-    if (MQTTclient_tls.connected()) {
-      MQTTclient_tls.publish(topic, payload);
+    if (mqttClient_tls.connected()) {
+      mqttClient_tls.publish(topic, payload);
       return true;
     } else {
       return false;
     }
   } else {
-    if (MQTTclient.connected()) {
-      MQTTclient.publish(topic, payload);
+    if (mqttClient.connected()) {
+      mqttClient.publish(topic, payload);
       return true;
     } else {
       return false;
@@ -1783,21 +1820,21 @@ boolean mqttPublish(const char* topic, const char* payload) {
 }
 
 void startMQTTConnection() {
-  MQTTclient.setServer(config.mqtt_server, config.mqtt_port);
-  MQTTclient.setCallback(MQTTcallback);
+  mqttClient.setServer(config.mqtt_server, config.mqtt_port);
+  mqttClient.setCallback(MQTTcallback);
   delay(100);
-  if (MQTTclient.connected()) {
-    MQTTclient.publish(config.mqtt_stat_topic, "locked", true);
+  if (mqttClient.connected()) {
+    mqttClient.publish(config.mqtt_stat_topic, "locked", true);
   }
   lastMQTTConnectAttempt = millis();
 }
 
 void startMQTTConnection_tls() {
-  MQTTclient_tls.setServer(config.mqtt_server, config.mqtt_port);
-  MQTTclient_tls.setCallback(MQTTcallback);
+  mqttClient_tls.setServer(config.mqtt_server, config.mqtt_port);
+  mqttClient_tls.setCallback(MQTTcallback);
   delay(100);
-  if (MQTTclient_tls.connected()) {
-    MQTTclient_tls.publish(config.mqtt_stat_topic, "locked", true);
+  if (mqttClient_tls.connected()) {
+    mqttClient_tls.publish(config.mqtt_stat_topic, "locked", true);
   }
   lastMQTTConnectAttempt = millis();
 }
@@ -1832,17 +1869,25 @@ boolean mqttConnect() {
   if (!(config.mqtt_enabled) || (WiFi.status() != WL_CONNECTED)) {
     return false;
   }
-  if (config.mqtt_tls) {
-    if (MQTTclient_tls.connect(config.mqtt_client_name)) {
+  if (config.mqtt_tls && config.mqtt_auth == false) {
+    if (mqttClient_tls.connect(config.mqtt_client_name)) {
       Serial.println("Connected to MQTT broker ");
       mqttPublish(config.mqtt_stat_topic, "Connected to MQTT Broker");
-      MQTTclient_tls.subscribe(config.mqtt_cmnd_topic);
+      mqttClient_tls.subscribe(config.mqtt_cmnd_topic);
       publishStats();
-      return MQTTclient_tls.connected();
+      return mqttClient_tls.connected();
     }
-  } else if (config.mqtt_auth) {
-    if (MQTTclient.connect(config.mqtt_client_name, config.mqtt_user, config.mqtt_password)) {
-      MQTTclient.setBufferSize(512);
+  } else if (config.mqtt_tls && config.mqtt_auth) {
+    if (mqttClient_tls.connect(config.mqtt_client_name, config.mqtt_user, config.mqtt_password)) {
+      Serial.println("Connected to MQTT broker ");
+      mqttPublish(config.mqtt_stat_topic, "Connected to MQTT Broker");
+      mqttClient_tls.subscribe(config.mqtt_cmnd_topic);
+      publishStats();
+      return mqttClient_tls.connected();
+    }
+  } else if (config.mqtt_tls == false && config.mqtt_auth) {
+    if (mqttClient.connect(config.mqtt_client_name, config.mqtt_user, config.mqtt_password)) {
+      mqttClient.setBufferSize(512);
       Serial.print("Connected to MQTT broker ");
       Serial.print(config.mqtt_server);
       Serial.print(" on port ");
@@ -1850,40 +1895,44 @@ boolean mqttConnect() {
       Serial.print(" as ");
       Serial.println(config.mqtt_client_name);
       mqttPublish(config.mqtt_stat_topic, "Connected to MQTT Broker");
-      MQTTclient.subscribe(config.mqtt_cmnd_topic);
+      mqttClient.subscribe(config.mqtt_cmnd_topic);
       publishStats();
-      return MQTTclient.connected();
+      return mqttClient.connected();
     }
   } else {
-    if (MQTTclient.connect(config.mqtt_client_name)) {
-      MQTTclient_tls.setBufferSize(512);
+    if (mqttClient.connect(config.mqtt_client_name)) {
+      mqttClient_tls.setBufferSize(512);
       Serial.print("Connected to MQTT broker ");
       Serial.print(config.mqtt_server);
       Serial.print(" as ");
       Serial.println(config.mqtt_client_name);
       mqttPublish(config.mqtt_stat_topic, "Connected to MQTT Broker");
-      MQTTclient.subscribe(config.mqtt_cmnd_topic);
+      mqttClient.subscribe(config.mqtt_cmnd_topic);
       publishStats();
-      return MQTTclient.connected();
+      return mqttClient.connected();
     }
   }
   Serial.print("Unable to connect to MQTT broker ");
   Serial.println(config.mqtt_server);
+  Serial.print("Error: ");
+  char lastError[100];
+  wifiClient_tls.lastError(lastError,100);  //Get the last error for WiFiClientSecure
+  Serial.println(lastError);
   return false;
 }
 
 void checkMqtt() {
   if (config.mqtt_tls) {
-    if (MQTTclient_tls.connected()) {
-      MQTTclient_tls.loop();
+    if (mqttClient_tls.connected()) {
+      mqttClient_tls.loop();
       unsigned long now = millis();
       if (now - lastMsg > 2000) {
         lastMsg = now;
       }
     }
   } else {
-    if (MQTTclient.connected()) {
-      MQTTclient.loop();
+    if (mqttClient.connected()) {
+      mqttClient.loop();
       unsigned long now = millis();
       if (now - lastMsg > 2000) {
         lastMsg = now;
@@ -2466,7 +2515,7 @@ const char* html_head = R"rawliteral(
       .updateInput {height: 18px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
       .updateInput:hover {height: 18px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
       .uploadBar {width:300px;}
-      .statsBox {background-color: #303030; font-size: 11px; width: 300px; height: 120px; resize: vertical; color: #ff3200;}
+      .statsBox {background-color: #303030; font-size: 11px; width: 300px; height: 130px; resize: vertical; color: #ff3200;}
       .orangeButton {height 30px; width: 49px; auto;background-color: #ff3200; border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
       .orangeButton:hover {height 30px; width: 49px; background-color: #ef2200; border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
       .addKeyInput {height 17px; width: 245px;border: 1px solid #ff3200; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black;}
@@ -2800,9 +2849,16 @@ void setup() {
   // Should load default config if run for the first time
   Serial.print("Loading configuration...");
   loadFSJSON_config(config_filename, config);
-  if (config.mqtt_tls) {
-    if (!loadTLSCredentials()) {
-      Serial.println("Could not load TLS credentials from FFat.");
+  if (config.mqtt_tls && config.mqtt_auth == false) {
+    if (!loadTLSClient()) {
+      Serial.println("Could not load TLS client cert/key from FFat.");
+    }
+    if (!loadTLSCA()) {
+      Serial.println("Could not load CA cert from FFat.");
+    }
+  } else if (config.mqtt_tls && config.mqtt_auth) {
+    if (!loadTLSCA()) {
+      Serial.println("Could not load CA cert from FFat.");
     }
   }
   Serial.print("Loading bell file...");
@@ -2859,7 +2915,9 @@ void setup() {
     }
     if (config.mqtt_enabled) {
       Serial.print("Attempting connection to MQTT broker ");
-      Serial.println(config.mqtt_server);
+      Serial.print(config.mqtt_server);
+      Serial.print(":");
+      Serial.print(config.mqtt_port);
       mqttConnect();
     }
   } else {
