@@ -263,11 +263,11 @@ void printStats() {
   statsPayload += "MAC address: " + WiFi.macAddress() + "\n";
   statsPayload += "Wifi strength: " + String(WiFi.RSSI()) + "dBm (" + rssiToPercent(WiFi.RSSI()) + "% - " + rssiToQuality(WiFi.RSSI()) + ")" + "\n";
   statsPayload += "Uptime: " + uptime_formatter::getUptime() + "\n";
-  if (digitalRead(SD_CD_PIN) == LOW) {
-    statsPayload += "SD Card present: true\n";
-  } else {
-    statsPayload += "SD Card present: false\n";
-  }
+  //if (digitalRead(SD_CD_PIN) == LOW) {
+  //  statsPayload += "SD Card present: true\n";
+  //} else {
+  //  statsPayload += "SD Card present: false\n";
+  //}
   statsPayload += "FFat free space: " + formatNumber(FFat.usedBytes()/1024) + "kB of " +  formatNumber(FFat.totalBytes()/1024) + "kB used" + "\n";
   if (digitalRead(SD_CD_PIN) == LOW) {
     statsPayload += "SD space: " + formatNumber(SD.usedBytes()/1024) + "kB of " + formatNumber(SD.totalBytes()/1024) + "kB used";
@@ -283,11 +283,11 @@ void statsPanel() {
   statsPayload += "Wifi strength: " + String(WiFi.RSSI()) + "dBm (" + rssiToPercent(WiFi.RSSI()) + "% - " + rssiToQuality(WiFi.RSSI()) + ")" + "\n";
   statsPayload += "MAC address: " + WiFi.macAddress() + "\n";
   statsPayload += "Uptime: " + uptime_formatter::getUptime() + "\n";
-  if (digitalRead(SD_CD_PIN) == LOW) {
-    statsPayload += "SD Card present: true\n";
-  } else {
-    statsPayload += "SD Card present: false\n";
-  }
+  //if (digitalRead(SD_CD_PIN) == LOW) {
+  //  statsPayload += "SD Card present: true\n";
+  //} else {
+  //  statsPayload += "SD Card present: false\n";
+  //}
   statsPayload += "FFat free space: " + formatNumber(FFat.usedBytes()/1024) + "kB of " +  formatNumber(FFat.totalBytes()/1024) + "kB used" + "\n";
   if (digitalRead(SD_CD_PIN) == LOW) {
     statsPayload += "SD space: " + formatNumber(SD.usedBytes()/1024) + "kB of " + formatNumber(SD.totalBytes()/1024) + "kB used" + "\n";
@@ -305,16 +305,21 @@ void publishStats() {
   statsPayload += "Wifi strength: " + String(WiFi.RSSI()) + "dBm (" + rssiToPercent(WiFi.RSSI()) + "% - " + rssiToQuality(WiFi.RSSI()) + ")" + "\n";
   statsPayload += "MAC address: " + WiFi.macAddress() + "\n";
   statsPayload += "Uptime: " + uptime_formatter::getUptime() + "\n";
-  if (digitalRead(SD_CD_PIN) == LOW) {
-    statsPayload += "SD Card present: true\n";
-  } else {
-    statsPayload += "SD Card present: false\n";
-  }
-  statsPayload += "FFat free space: " + formatNumber(FFat.usedBytes()/1024) + "kB of " +  formatNumber(FFat.totalBytes()/1024) + "kB used" + "\n";
-  if (digitalRead(SD_CD_PIN) == LOW) {
-    statsPayload += "SD space: " + formatNumber(SD.usedBytes()/1024) + "kB of " + formatNumber(SD.totalBytes()/1024) + "kB used";
-  }
   mqttPublish(config.mqtt_stat_topic, statsPayload.c_str());
+}
+
+void publishStorage() {
+  String storagePayload;
+  if (digitalRead(SD_CD_PIN) == LOW) {
+    storagePayload += "SD Card present: true\n";
+  } else {
+    storagePayload += "SD Card present: false\n";
+  }
+  storagePayload += "FFat free space: " + formatNumber(FFat.usedBytes()/1024) + "kB of " +  formatNumber(FFat.totalBytes()/1024) + "kB used" + "\n";
+  if (digitalRead(SD_CD_PIN) == LOW) {
+    storagePayload += "SD space: " + formatNumber(SD.usedBytes()/1024) + "kB of " + formatNumber(SD.totalBytes()/1024) + "kB used";
+  }
+  mqttPublish(config.mqtt_stat_topic, storagePayload.c_str());
 }
 
 // --- Wiegand Functions --- Wiegand Functions --- Wiegand Functions --- Wiegand Functions --- Wiegand Functions --- Wiegand Functions --- Wiegand Functions ---
@@ -1361,6 +1366,7 @@ void checkAUX() {
     if (count < 499) {
       printStats();
       publishStats();
+      publishStorage();
     }
     if (count > 499) {
       setPixPurple();
@@ -1875,6 +1881,7 @@ boolean mqttConnect() {
       mqttPublish(config.mqtt_stat_topic, "Connected to MQTT Broker");
       mqttClient_tls.subscribe(config.mqtt_cmnd_topic);
       publishStats();
+      publishStorage();
       return mqttClient_tls.connected();
     }
   } else if (config.mqtt_tls && config.mqtt_auth) {
@@ -1883,6 +1890,7 @@ boolean mqttConnect() {
       mqttPublish(config.mqtt_stat_topic, "Connected to MQTT Broker");
       mqttClient_tls.subscribe(config.mqtt_cmnd_topic);
       publishStats();
+      publishStorage();
       return mqttClient_tls.connected();
     }
   } else if (config.mqtt_tls == false && config.mqtt_auth) {
@@ -1909,6 +1917,7 @@ boolean mqttConnect() {
       mqttPublish(config.mqtt_stat_topic, "Connected to MQTT Broker");
       mqttClient.subscribe(config.mqtt_cmnd_topic);
       publishStats();
+      publishStorage();
       return mqttClient.connected();
     }
   }
@@ -1990,6 +1999,7 @@ boolean executeCommand(String command) {
   } else if (command.equals("stats")) {
     printStats();
     publishStats();
+    publishStorage();
   } else if (command.equals("copy_keys_sd_to_ffat")) {
     keysSDtoFFat();
   } else if (command.equals("copy_config_sd_to_ffat")) {
@@ -2917,7 +2927,7 @@ void setup() {
       Serial.print("Attempting connection to MQTT broker ");
       Serial.print(config.mqtt_server);
       Serial.print(":");
-      Serial.print(config.mqtt_port);
+      Serial.println(config.mqtt_port);
       mqttConnect();
     }
   } else {
