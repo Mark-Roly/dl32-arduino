@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 14/05/2025
+  Last updated 18/05/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250514
+#define codeVersion 20250518
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -263,11 +263,11 @@ void printStats() {
   statsPayload += "MAC address: " + WiFi.macAddress() + "\n";
   statsPayload += "Wifi strength: " + String(WiFi.RSSI()) + "dBm (" + rssiToPercent(WiFi.RSSI()) + "% - " + rssiToQuality(WiFi.RSSI()) + ")" + "\n";
   statsPayload += "Uptime: " + uptime_formatter::getUptime() + "\n";
-  //if (digitalRead(SD_CD_PIN) == LOW) {
-  //  statsPayload += "SD Card present: true\n";
-  //} else {
-  //  statsPayload += "SD Card present: false\n";
-  //}
+  if (digitalRead(SD_CD_PIN) == LOW) {
+    statsPayload += "SD Card present: true\n";
+  } else {
+    statsPayload += "SD Card present: false\n";
+  }
   statsPayload += "FFat free space: " + formatNumber(FFat.usedBytes()/1024) + "kB of " +  formatNumber(FFat.totalBytes()/1024) + "kB used" + "\n";
   if (digitalRead(SD_CD_PIN) == LOW) {
     statsPayload += "SD space: " + formatNumber(SD.usedBytes()/1024) + "kB of " + formatNumber(SD.totalBytes()/1024) + "kB used";
@@ -283,11 +283,11 @@ void statsPanel() {
   statsPayload += "Wifi strength: " + String(WiFi.RSSI()) + "dBm (" + rssiToPercent(WiFi.RSSI()) + "% - " + rssiToQuality(WiFi.RSSI()) + ")" + "\n";
   statsPayload += "MAC address: " + WiFi.macAddress() + "\n";
   statsPayload += "Uptime: " + uptime_formatter::getUptime() + "\n";
-  //if (digitalRead(SD_CD_PIN) == LOW) {
-  //  statsPayload += "SD Card present: true\n";
-  //} else {
-  //  statsPayload += "SD Card present: false\n";
-  //}
+  if (digitalRead(SD_CD_PIN) == LOW) {
+    statsPayload += "SD Card present: true\n";
+  } else {
+    statsPayload += "SD Card present: false\n";
+  }
   statsPayload += "FFat free space: " + formatNumber(FFat.usedBytes()/1024) + "kB of " +  formatNumber(FFat.totalBytes()/1024) + "kB used" + "\n";
   if (digitalRead(SD_CD_PIN) == LOW) {
     statsPayload += "SD space: " + formatNumber(SD.usedBytes()/1024) + "kB of " + formatNumber(SD.totalBytes()/1024) + "kB used" + "\n";
@@ -304,11 +304,13 @@ void publishStats() {
   statsPayload += "IP address: " + WiFi.localIP().toString() + "\n";
   statsPayload += "Wifi strength: " + String(WiFi.RSSI()) + "dBm (" + rssiToPercent(WiFi.RSSI()) + "% - " + rssiToQuality(WiFi.RSSI()) + ")" + "\n";
   statsPayload += "MAC address: " + WiFi.macAddress() + "\n";
-  statsPayload += "Uptime: " + uptime_formatter::getUptime() + "\n";
+  statsPayload += "Uptime: " + uptime_formatter::getUptime();
   mqttPublish(config.mqtt_stat_topic, statsPayload.c_str());
+  delay(250);
 }
 
 void publishStorage() {
+  delay(250);
   String storagePayload;
   if (digitalRead(SD_CD_PIN) == LOW) {
     storagePayload += "SD Card present: true\n";
@@ -635,29 +637,30 @@ void checkSDPresent(int verbose) {
 
 // --- FATFS Functions --- FATFS Functions --- FATFS Functions --- FATFS Functions --- FATFS Functions --- FATFS Functions --- FATFS Functions ---
 
-void fatfs_setup() {
+bool fatfs_setup() {
   Serial.print("Mounting FFAT filesystem...");
   if (FORMAT_FFAT) {
     FFat.format();
   }  
   if(!FFat.begin(true)){
     Serial.println("FAILED");
-    return;
+    return false;
   }
   Serial.println("OK");
   FFat_present = true;
+  return true;
 }
 
-void listDir(fs::FS & fs, const char * dirname, uint8_t levels){
+bool listDir(fs::FS & fs, const char * dirname, uint8_t levels){
   Serial.printf("Listing directory: %s... ", dirname);
   File root = fs.open(dirname);
   if(!root){
     Serial.println("failed to open directory");
-    return;
+    return false;
   }
   if(!root.isDirectory()){
     Serial.println("not a directory");
-    return;
+    return false;
   }
   File file = root.openNextFile();
   while(file){
@@ -675,85 +678,103 @@ void listDir(fs::FS & fs, const char * dirname, uint8_t levels){
     }
     file = root.openNextFile();
   }
+  return true;
 }
 
-void readFile(fs::FS & fs, const char * path){
+bool readFile(fs::FS & fs, const char * path){
   Serial.printf("Reading file: %s... ", path);
   File file = fs.open(path);
   if(!file || file.isDirectory()){
     Serial.println("failed to open file for reading");
-    return;
+    return false;
   }
   Serial.println("- read from file:");
   while(file.available()){
     Serial.write(file.read());
   }
   file.close();
+  return true;
 }
 
-void writeFile(fs::FS & fs, const char * path, const char * message){
+bool writeFile(fs::FS & fs, const char * path, const char * message){
   Serial.printf("Writing file: %s... ", path);
   File file = fs.open(path, FILE_WRITE);
   if(!file){
     Serial.println("failed to open file for writing");
-    return;
+    return false;
   }
   if(file.print(message)){
       Serial.println("file written");
   } else {
     Serial.println("write failed");
+    file.close();
+    return false;
   }
   file.close();
+  return true;
 }
 
-void appendlnFile(fs::FS & fs, const char * path, const char * message){
+bool appendlnFile(fs::FS & fs, const char * path, const char * message){
   //Serial.printf("Appending line to file: %s... ", path);
   File file = fs.open(path, FILE_APPEND);
   if(!file){
     Serial.println("- failed to open file for appending line");
-    return;
+    return false;
   }
   if(file.println(message)){
     //Serial.println("message line appended");
   } else {
     Serial.println("append line failed");
+    return false;
   }
   file.close();
+  return true;
 }
 
-void renameFile(fs::FS & fs, const char * path1, const char * path2){
+bool renameFile(fs::FS & fs, const char * path1, const char * path2){
   //Serial.printf("Renaming file %s to %s... ", path1, path2);
   if (fs.rename(path1, path2)) {
-    //Serial.println("file renamed");
+    Serial.println("file renamed");
   } else {
     Serial.println("rename failed");
+    return false;
   }
+  return true;
 }
 
-void deleteFile(fs::FS & fs, const char * path) {
+bool deleteFile(fs::FS & fs, const char * path) {
   //Serial.printf("Deleting file: %s...", path);
   if (fs.remove(path)) {
-    //Serial.println("file deleted");
+    playTwinkleDownTone();
+    Serial.print("Deleted file ");
+    Serial.println(path);
   } else {
-    Serial.println("delete failed");
+    Serial.print("Failed to delete file ");
+    Serial.println(path);
+    return false;
   }
+  return true;
 }
 
-void createDir(fs::FS & fs, const char * path) {
+bool createDir(fs::FS & fs, const char * path) {
   //Serial.printf("Creating Dir: %s\n", path);
   if (fs.mkdir(path)) {
-    //Serial.println("Dir created");
+    Serial.println("Dir created");
   } else {
     Serial.println("mkdir failed");
+    return false;
   }
+  return true;
 }
 
-void removeDir(fs::FS & fs, const char * path) {
+bool removeDir(fs::FS & fs, const char * path) {
   //Serial.printf("Removing Dir: %s\n", path);
   if (fs.rmdir(path)) {
-    //Serial.println("Dir removed");
+    Serial.println("Dir removed");
+    return true;
   } else {
     Serial.println("rmdir failed");
+    return false;
   }
 }
 
@@ -792,7 +813,7 @@ bool copyFileFFat(const char* sourcePath, const char* destinationPath) {
 }
 
 // Loads the configuration from a file
-void loadFSJSON_config(const char* config_filename, Config& config) {
+bool loadFSJSON_config(const char* config_filename, Config& config) {
   // Open file for reading
   File config_file = FFat.open(config_filename);
 
@@ -839,13 +860,14 @@ void loadFSJSON_config(const char* config_filename, Config& config) {
   config.garageMomentaryDur_Ms = config_doc["garageMomentaryDur_Ms"] | 500;
   config.addKeyTimeoutDur_S = config_doc["addKeyTimeoutDur_S"] | 10;
   config_file.close();
+  return true;
 }
 
 // Loads the addressing from a file
-void loadFSJSON_addressing(const char* addressing_filename, Addressing& addressing) {
+bool loadFSJSON_addressing(const char* addressing_filename, Addressing& addressing) {
   if (FFat.exists(addressing_filename) == false) {
     Serial.println("FAILED: Using dynamic addressing");
-    return;
+    return false;
   }
   // Open file for reading
   File addressing_file = FFat.open(addressing_filename);
@@ -874,7 +896,7 @@ void loadFSJSON_addressing(const char* addressing_filename, Addressing& addressi
         break;
     }
     Serial.println("' - Using dynamic addressing");
-    return;
+    return false;
   }
   strlcpy(addressing.localIP, addressing_doc["localIP"] | "false", sizeof(addressing.localIP));
   strlcpy(addressing.subnetMask, addressing_doc["subnetMask"] | "null_wifi_ssid", sizeof(addressing.subnetMask));
@@ -882,10 +904,10 @@ void loadFSJSON_addressing(const char* addressing_filename, Addressing& addressi
   addressing_file.close();
   staticIP = true;
   Serial.println("Static addressing loaded");
-  return;
+  return true;
 }
 
-boolean configSDtoFFat() {
+bool configSDtoFFat() {
   if ((SD_present == true) && (SD.exists(config_filename))) {
     File sourceFile = SD.open(config_filename);
     File destFile = FFat.open(config_filename, FILE_WRITE);
@@ -902,11 +924,10 @@ boolean configSDtoFFat() {
   }
   playTwinkleUpTone();
   Serial.println("Config file successfuly copied from SD to FFat");
-  restart();
   return true;
 }
 
-void configFFattoSD() {
+bool configFFattoSD() {
   if ((SD_present == true) && (FFat.exists(config_filename))){
     File sourceFile = FFat.open(config_filename);
     File destFile = SD.open(config_filename, FILE_WRITE);
@@ -922,11 +943,12 @@ void configFFattoSD() {
     playUnauthorizedTone();
     Serial.println("");
     Serial.println("No SD Card Mounted or no such file");
-    return;
+    return false;
   }
+  return true;
 }
 
-void addressingSDtoFFat() {
+bool addressingSDtoFFat() {
   if ((SD_present == true) && (SD.exists(addressing_filename))) {
     File sourceFile = SD.open(addressing_filename);
     File destFile = FFat.open(addressing_filename, FILE_WRITE);
@@ -940,12 +962,14 @@ void addressingSDtoFFat() {
     playUnauthorizedTone();
     Serial.println("");
     Serial.println("No SD Card Mounted or no such file");
-    return;
+    return false;
   }
   Serial.println("Addressing file successfuly copied from SD to FFat");
   restart();
+  return true;
 }
-boolean allSDtoFFat() {
+
+bool allSDtoFFat() {
   int copiedFileCount = 0;
 
   // List of file names to loop through
@@ -976,15 +1000,15 @@ boolean allSDtoFFat() {
     Serial.print(copiedFileCount);
     Serial.println(" files successfuly copied from SD to FFat");
     restart();
-    return true;
   } else {
     playUnauthorizedTone();
     Serial.println("No SD Card Mounted or no valid files");
     return false;
-  } 
+  }
+  return true;
 }
 
-void keysSDtoFFat() {
+bool keysSDtoFFat() {
   if ((SD_present == true) && (SD.exists(keys_filename))) {
     File sourceFile = SD.open(keys_filename);
     File destFile = FFat.open(keys_filename, FILE_WRITE);
@@ -999,12 +1023,13 @@ void keysSDtoFFat() {
     Serial.println("");
     playUnauthorizedTone();
     Serial.println("No SD Card Mounted or no such file");
-    return;
+    return false;
   }
   playTwinkleUpTone();
+  return true;
 }
 
-void keysFFattoSD() {
+bool keysFFattoSD() {
   if ((SD_present == true) && (FFat.exists(keys_filename))){
     File sourceFile = FFat.open(keys_filename);
     File destFile = SD.open(keys_filename, FILE_WRITE);
@@ -1020,8 +1045,9 @@ void keysFFattoSD() {
     Serial.println("");
     playUnauthorizedTone();
     Serial.println("No SD Card Mounted or no such file");
-    return;
+    return false;
   }
+  return true;
 }
 
 void addKeyMode() {
@@ -1697,6 +1723,9 @@ void ringBell() {
     Serial.println("Ringing Bell");
     mqttPublish(config.mqtt_stat_topic, "Ringing Bell");
     parseAndPlaySequence(bellFile);
+  } else {
+    Serial.println("Cannot ring bell in silent mode");
+    mqttPublish(config.mqtt_stat_topic, "Cannot ring bell in silent mode");
   }
 }
 
@@ -2251,6 +2280,10 @@ void displayFiles() {
   pageContent += "          document.getElementById('previewContent').innerText = text;\n";
   pageContent += "          document.getElementById('previewModal').style.display = 'block';\n";
   pageContent += "        }\n";
+  pageContent += "        function showMessage(message) {\n";
+  pageContent += "          document.getElementById('previewContent').innerText = message;\n";
+  pageContent += "          document.getElementById('previewModal').style.display = 'block';\n";
+  pageContent += "        }\n";
   pageContent += "      </script>\n";
   pageContent += "      <a class='header'>File Management</a>\n";
   pageContent += "      <br/>\n";
@@ -2307,7 +2340,8 @@ void outputConfig() {
   while (outFile.available()) {
     Serial.write(outFile.read());
   }
-  MainPage();
+  webServer.sendHeader("Location", "/",true);
+  webServer.send(302, "text/plain", "");
 }
 
 void MainPage() {
@@ -2370,12 +2404,14 @@ void garageCloseHTTP() {
 
 void configSDtoFFatHTTP() {
   configSDtoFFat();
-  MainPage();
+  webServer.sendHeader("Location", "/",true);
+  webServer.send(302, "text/plain", "");
 }
 
 void configFFattoSDHTTP() {
+  webServer.sendHeader("Location", "/",true);
+  webServer.send(302, "text/plain", "");
   configFFattoSD();
-  MainPage();
 }
 
 void keysSDtoFFatHTTP() {
@@ -2392,6 +2428,7 @@ void keysFFattoSDHTTP() {
 
 void purgeKeysHTTP() {
   deleteFile(FFat, keys_filename);
+  playTwinkleDownTone();
   webServer.sendHeader("Location", "/",true);  
   webServer.send(302, "text/plain", "");
 }
@@ -2456,7 +2493,9 @@ void saveAddressingStaticHTTP() {
 }
 
 void addressingStaticSDtoFFatHTTP() {
-  MainPage();
+  webServer.sendHeader("Location", "/",true);
+  webServer.send(302, "text/plain", "");
+  addressingSDtoFFat();
 }
 
 void purgeAddressingStaticHTTP() {
@@ -2698,39 +2737,42 @@ void startWebServer() {
   webServer.on("/saveAddressingStaticHTTP", saveAddressingStaticHTTP);
   webServer.on("/addressingStaticSDtoFFatHTTP", addressingStaticSDtoFFatHTTP);
   webServer.on("/purgeAddressingStaticHTTP", purgeAddressingStaticHTTP);
-    webServer.on(UriRegex("/setBell/([\\w\\.\\-]{1,32})"), HTTP_GET, [&]() {
+  webServer.on(UriRegex("/setBell/([\\w\\.\\-]{1,32})"), HTTP_GET, [&]() {
     Serial.print("Setting bell tone from url ");
     Serial.println(webServer.pathArg(0));
     setCurrentBell(webServer.pathArg(0));
-    MainPage();
+    webServer.sendHeader("Location", "/",true);
+    webServer.send(302, "text/plain", "");
   });
   webServer.on(UriRegex("/setFormBell/.{0,20}"), HTTP_GET, [&]() {
-    Serial.print("Setting bell tone from WebUI");
+    Serial.print("Setting bell tone from WebUI ");
     Serial.println(webServer.arg("targetBell"));
     setCurrentBell(webServer.arg("targetBell"));
-    MainPage();
+    webServer.sendHeader("Location", "/",true);
+    webServer.send(302, "text/plain", "");
   });
   webServer.on(UriRegex("/addKey/([0-9a-zA-Z]{4,8})"), HTTP_GET, [&]() {
     writeKey(webServer.pathArg(0));
-    MainPage();
+    webServer.sendHeader("Location", "/",true);
+    webServer.send(302, "text/plain", "");
   });
   webServer.on("/update_post", HTTP_POST, []() {
     webServer.sendHeader("Connection", "close");
     if (Update.hasError()) {
       webServer.send(200, "text/plain", "Update Failed!");
     } else {
-      webServer.send(200, "text/plain", "Update Successful. Rebooting...");
+      webServer.send(200, "text/plain", "Update Successful. Restarting...");
       delay(100);
       restart();
     }
   }, handleUpdateUpload);
   webServer.on(UriRegex("/remKey/([0-9a-zA-Z]{3,16})"), HTTP_GET, [&]() {
     removeKey(webServer.pathArg(0));
-    MainPage();
+    webServer.sendHeader("Location", "/",true);
+    webServer.send(302, "text/plain", "");
   });
   webServer.on(UriRegex("/previewFile/([\\w\\.\\-]{1,32})"), HTTP_GET, [&]() {
     previewFile(webServer.pathArg(0));
-    //MainPage();
   });
   webServer.on(UriRegex("/downloadFile/([0-9a-zA-Z.\\-_]{3,32})"), HTTP_GET, []() {
     String filename = "/" + webServer.pathArg(0);
@@ -2749,16 +2791,19 @@ void startWebServer() {
     String path = "/" + urlDecode(encoded);
     deleteFile(FFat, path.c_str());
     playTwinkleDownTone();
-    MainPage();
+    webServer.sendHeader("Location", "/",true);
+    webServer.send(302, "text/plain", "");
   });
   webServer.on(UriRegex("/serial/([0-9a-zA-Z_-]{3,10})"), HTTP_GET, [&]() {
     Serial.print("URL Command entered: ");
     Serial.print(webServer.pathArg(0));
     executeCommand(webServer.pathArg(0));
-    MainPage();
+    webServer.sendHeader("Location", "/",true);
+    webServer.send(302, "text/plain", "");
   });
   webServer.on("/upload", HTTP_POST, []() {
-    MainPage();
+    webServer.sendHeader("Location", "/",true);
+    webServer.send(302, "text/plain", "");
     playTwinkleUpTone();
   }, handleFileUpload);
   webServer.on("/", MainPage);
@@ -2767,7 +2812,8 @@ void startWebServer() {
     Serial.print(webServer.arg("key"));
     Serial.println(" from webUI input.");
     writeKey(webServer.arg("key"));
-    MainPage();
+    webServer.sendHeader("Location", "/",true);
+    webServer.send(302, "text/plain", "");
   });
   webServer.begin();
   if (WiFi.status() == WL_CONNECTED) {
