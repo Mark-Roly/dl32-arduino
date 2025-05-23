@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 18/05/2025
+  Last updated 23/05/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250518
+#define codeVersion 20250523
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -141,8 +141,8 @@ unsigned long lastMsg = 0;
 unsigned long disconCount = 0;
 unsigned long lastMQTTConnectAttempt = 0;
 unsigned long lastWifiConnectAttempt = 0;
-unsigned long wifiReconnectInterval = 300000;
-unsigned long mqttReconnectInterval = 300000;
+unsigned long wifiReconnectInterval = 180000;
+unsigned long mqttReconnectInterval = 180000;
 int add_count = 0;
 int seqTmr = 0;
 int hwRev = 0;
@@ -164,14 +164,22 @@ boolean add_mode = false;
 boolean garage_mode = false;
 boolean magsr_present = false;
 
+// String holder for html webpage content
 String pageContent = "";
+
+// Filenames
 const char* config_filename = "/dl32.json";
 const char* addressing_filename = "/addressing.json";
 const char* keys_filename = "/keys.txt";
 const char* bell_filename = "/current.bell_";
 const char* caCrt_filename = "/ca.crt";
 const char* clCrt_filename = "/client.crt";
-const char* clKey_filename = "/client.key";;
+const char* clKey_filename = "/client.key";
+
+// Values for URL OTA (Once Releases are published)
+const char* releaseRepoUrl = "http://github.com";
+uint16_t releaseRepoPort = 80;
+const char* releaseRepoPath = "/Mark-Roly/dl32-arduino/releases/latest/download/DL32.bin";
 
 // TLS buffer pointers
 char* ca_cert = nullptr;
@@ -1718,6 +1726,21 @@ void playTwinkleDownTone() {
   }
 }
 
+void playBellFile(String filename) {
+  File file = FFat.open(filename);
+  String tempBellFile = "";
+  if (!file) {
+    Serial.println("FAILED: Using default");
+    bellFile = "Default Tone:1:0 C#4 1 43;:";
+    return;
+  }
+  while (file.available()) {
+    tempBellFile += (char)file.read();
+  }
+  file.close();
+  parseAndPlaySequence(tempBellFile);
+}
+
 void ringBell() {
   if (digitalRead(DS03) == HIGH) {
     Serial.println("Ringing Bell");
@@ -2212,7 +2235,8 @@ void bellSelect() {
     file = root.openNextFile();
   }
   pageContent += "          </select>\n";
-  pageContent += "          <input class='targetBellButton' type='submit' value='SELECT'>\n";
+  pageContent += "          <input class='targetBellButton' type='submit' name='play' value='PLAY'>\n";
+  pageContent += "          <input class='targetBellButton' type='submit' name='select' value='SELECT'>\n";
   pageContent += "        </form>\n";
   pageContent += "      </div>\n";
   pageContent += "      <br/>\n";
@@ -2498,6 +2522,14 @@ void addressingStaticSDtoFFatHTTP() {
   addressingSDtoFFat();
 }
 
+void githubOta() {
+  webServer.sendHeader("Location", "/",true);  
+  webServer.send(302, "text/plain", "");
+  delay(2000);
+  Serial.println("Performing OTA update from github");
+  handleUrlOTA(releaseRepoUrl, releaseRepoPort, releaseRepoPath);
+}
+
 void purgeAddressingStaticHTTP() {
   webServer.sendHeader("Location", "/",true);  
   webServer.send(302, "text/plain", "");
@@ -2556,8 +2588,8 @@ const char* html_head = R"rawliteral(
       .fileMgInputFile:hover {height: 18px; width: 235px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
       .fileMgInputButton {height: 18px; width: 60px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
       .fileMgInputButton:hover {height: 18px; width: 60px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
-      .targetBell {height: 18px; width: 235px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .targetBell:hover {height: 18px; width: 235px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .targetBell {height: 18px; width: 175px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .targetBell:hover {height: 18px; width: 175px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
       .targetBellButton {height: 18px; width: 60px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
       .targetBellButton:hover {height: 18px; width: 60px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
       .inputRow {display: flex; flex-direction: row; gap: 2px; justify-content: center; align-items: center; border: 0;}
@@ -2737,6 +2769,7 @@ void startWebServer() {
   webServer.on("/saveAddressingStaticHTTP", saveAddressingStaticHTTP);
   webServer.on("/addressingStaticSDtoFFatHTTP", addressingStaticSDtoFFatHTTP);
   webServer.on("/purgeAddressingStaticHTTP", purgeAddressingStaticHTTP);
+  webServer.on("/githubOta", githubOta);
   webServer.on(UriRegex("/setBell/([\\w\\.\\-]{1,32})"), HTTP_GET, [&]() {
     Serial.print("Setting bell tone from url ");
     Serial.println(webServer.pathArg(0));
@@ -2744,12 +2777,20 @@ void startWebServer() {
     webServer.sendHeader("Location", "/",true);
     webServer.send(302, "text/plain", "");
   });
-  webServer.on(UriRegex("/setFormBell/.{0,20}"), HTTP_GET, [&]() {
-    Serial.print("Setting bell tone from WebUI ");
-    Serial.println(webServer.arg("targetBell"));
-    setCurrentBell(webServer.arg("targetBell"));
-    webServer.sendHeader("Location", "/",true);
-    webServer.send(302, "text/plain", "");
+  webServer.on("/setFormBell/", HTTP_GET, [&]() {
+    if (webServer.hasArg("play")) {
+      Serial.print("Playing bell: ");
+      Serial.println(webServer.arg("targetBell"));
+      playBellFile("/" + webServer.arg("targetBell"));
+      webServer.sendHeader("Location", "/",true);
+      webServer.send(302, "text/plain", "");
+    } else if (webServer.hasArg("select")) {
+      Serial.print("Setting bell tone from WebUI: ");
+      Serial.println(webServer.arg("targetBell"));
+      setCurrentBell(webServer.arg("targetBell"));
+      webServer.sendHeader("Location", "/",true);
+      webServer.send(302, "text/plain", "");
+    }
   });
   webServer.on(UriRegex("/addKey/([0-9a-zA-Z]{4,8})"), HTTP_GET, [&]() {
     writeKey(webServer.pathArg(0));
@@ -2864,6 +2905,72 @@ void handleUpdateUpload() {
     }
   }
 }
+
+bool handleUrlOTA(const char* host, uint16_t port, const char* path) {
+    Serial.printf("[OTA] Connecting to %s:%u...\n", host, port);
+    if (!wifiClient.connect(host, port)) {
+        Serial.println("[OTA] Connection failed!");
+        return false;
+    }
+
+    // Use wifiClient throughout the function
+    Serial.printf("[OTA] Downloading file %s...\n", path);
+    wifiClient.printf("GET %s HTTP/1.1\r\n", path);
+    wifiClient.printf("Host: %s\r\n", host);
+    wifiClient.println("Connection: close\r\n");
+
+    // Wait for and skip headers
+    while (wifiClient.connected()) {
+        String line = wifiClient.readStringUntil('\n');
+        if (line == "\r") break;
+    }
+
+    // Start OTA with unknown size
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        Serial.println("[OTA] Not enough space for OTA");
+        return false;
+    }
+
+    Serial.println("[OTA] Starting OTA...");
+
+    uint8_t buff[1024];
+    size_t written = 0;
+
+    // Read until connection closes
+    while (wifiClient.connected() || wifiClient.available()) {
+        size_t len = wifiClient.available();
+        if (len) {
+            int readBytes = wifiClient.read(buff, std::min(len, sizeof(buff)));
+            if (readBytes > 0) {
+                size_t writtenNow = Update.write(buff, readBytes);
+                if (writtenNow != readBytes) {
+                    Serial.println("[OTA] Write error");
+                    return false;
+                }
+                written += writtenNow;
+            }
+        }
+        delay(1);
+    }
+
+    Serial.printf("[OTA] Written: %u bytes\n", written);
+
+    if (!Update.end(true)) {
+      Serial.printf("[OTA] Update failed: %s\n", Update.errorString());
+      return false;
+    }
+
+    if (!Update.isFinished()) {
+        Serial.println("[OTA] Update incomplete");
+        return false;
+    }
+
+    Serial.println("[OTA] Success! Rebooting...");
+    delay(1000);
+    ESP.restart();
+    return true;
+}
+
 
 // --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP ---
 
