@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 23/05/2025
+  Last updated 24/05/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250523
+#define codeVersion 20250524
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -177,7 +177,7 @@ const char* clCrt_filename = "/client.crt";
 const char* clKey_filename = "/client.key";
 
 // Values for URL OTA (Once Releases are published)
-const char* releaseRepoUrl = "http://github.com";
+const char* releaseRepoUrl = "www.github.com";
 uint16_t releaseRepoPort = 80;
 const char* releaseRepoPath = "/Mark-Roly/dl32-arduino/releases/latest/download/DL32.bin";
 
@@ -2272,10 +2272,37 @@ const char* updateScript = R"rawliteral(
           xhr.send(formData);
         }
       </script>
+      <script>
+        function startGithubUpdate() {
+          if (!confirm("Start GitHub OTA update?\nDevice will restart after update.")) return;
+          const progress = document.getElementById("progress");
+          progress.style.visibility = 'visible';
+          progress.value = 5;
+          const interval = setInterval(() => {
+            if (progress.value < 90) {
+              progress.value += 5;
+            }
+          }, 500); // fake smooth progress
+          fetch('/githubOta')
+          .then(res => {
+            clearInterval(interval);
+            progress.value = 100;
+            alert("Update started.\nIf successful, device will reboot shortly.");
+          })
+          .catch(err => {
+            clearInterval(interval);
+            progress.style.visibility = 'hidden';
+            alert("Error starting update: " + err.message);
+          });
+        }
+      </script>
 )rawliteral";
 
 const char* updateForm = R"rawliteral(
       <a class="header">Firmware Update</a>
+      <br/>
+      <button onclick="startGithubUpdate()">Update from latest GitHub Release</button>
+      <br/>
       <div class="inputRow">
         <input type="file" name="file" class="fileMgInputFile" id="firmware" required>
         <button type="button" class="fileMgInputButton" onclick="uploadFirmware()">UPDATE</button>
