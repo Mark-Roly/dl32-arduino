@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 24/05/2025
+  Last updated 25/05/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250524
+#define codeVersion 20250525
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -53,6 +53,7 @@
 #include <WiFiClientSecure.h>   // WifiClientSecure by Evandro Luis Copercini https://git.liberatedsystems.co.uk/jacob.eva/arduino-esp32/src/commit/bcd6dcf5f6f8a4670db53a495ad8c8b556c2a8fa/libraries/WiFiClientSecure
 #include <vector>               // vector library from C++ standard library https://github.com/espressif/arduino-esp32
 #include <algorithm>            // algorithm library from C++ standard library https://github.com/espressif/arduino-esp32
+#include <HTTPClient.h>
 
 // Hardware Rev 20240812 pins [Since codeVersion 20240819]
 #define buzzer_pin 14
@@ -177,9 +178,10 @@ const char* clCrt_filename = "/client.crt";
 const char* clKey_filename = "/client.key";
 
 // Values for URL OTA (Once Releases are published)
-const char* releaseRepoUrl = "www.github.com";
-uint16_t releaseRepoPort = 80;
-const char* releaseRepoPath = "/Mark-Roly/dl32-arduino/releases/latest/download/DL32.bin";
+const char* otaGithubAccount = "Mark-Roly";
+const char* otaGithubRepo = "dl32-arduino";
+const char* otaGithubBinary = "DL32.bin";
+String otaLatestGithubVersion = "";
 
 // TLS buffer pointers
 char* ca_cert = nullptr;
@@ -1803,6 +1805,7 @@ bool loadTLSClient() {
   }
   wifiClient_tls.setCertificate(client_cert);
   wifiClient_tls.setPrivateKey(client_key);
+  //wifiClient_tls.setInsecure();
   Serial.println("OK");
   return true;
 }
@@ -2304,8 +2307,8 @@ const char* updateForm = R"rawliteral(
       <button onclick="startGithubUpdate()">Update from latest GitHub Release</button>
       <br/>
       <div class="inputRow">
-        <input type="file" name="file" class="fileMgInputFile" id="firmware" required>
-        <button type="button" class="fileMgInputButton" onclick="uploadFirmware()">UPDATE</button>
+        <input type="file" name="file" class="firmwareInputFile" id="firmware" required>
+        <button type="button" class="firmwareInputButton" onclick="uploadFirmware()">UPDATE</button>
       </div>
       <progress id="progress" class="uploadBar" value="0" max="100" style="visibility: hidden;"></progress><br/>
 )rawliteral";
@@ -2550,11 +2553,10 @@ void addressingStaticSDtoFFatHTTP() {
 }
 
 void githubOta() {
-  webServer.sendHeader("Location", "/",true);  
-  webServer.send(302, "text/plain", "");
-  delay(2000);
-  Serial.println("Performing OTA update from github");
-  handleUrlOTA(releaseRepoUrl, releaseRepoPort, releaseRepoPath);
+  Serial.println("Performing OTA update from GitHub");
+  webServer.send(200, "text/plain", "OTA started");
+  delay(100);  // Allow time for response to flush before rebooting
+  handleGithubOTA();
 }
 
 void purgeAddressingStaticHTTP() {
@@ -2615,6 +2617,10 @@ const char* html_head = R"rawliteral(
       .fileMgInputFile:hover {height: 18px; width: 235px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
       .fileMgInputButton {height: 18px; width: 60px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
       .fileMgInputButton:hover {height: 18px; width: 60px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .firmwareInputFile {height: 18px; margin-top: 5px; width: 235px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .firmwareInputFile:hover {height: 18px; margin-top: 5px; width: 235px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .firmwareInputButton {height: 18px; margin-top: 5px; width: 60px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .firmwareInputButton:hover {height: 18px; margin-top: 5px; width: 60px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
       .targetBell {height: 18px; width: 175px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
       .targetBell:hover {height: 18px; width: 175px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
       .targetBellButton {height: 18px; width: 60px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
@@ -2833,7 +2839,7 @@ void startWebServer() {
       delay(100);
       restart();
     }
-  }, handleUpdateUpload);
+  }, handleUploadOTA);
   webServer.on(UriRegex("/remKey/([0-9a-zA-Z]{3,16})"), HTTP_GET, [&]() {
     removeKey(webServer.pathArg(0));
     webServer.sendHeader("Location", "/",true);
@@ -2910,7 +2916,7 @@ void handleFileUpload() {
 
 // --- OTA Functions --- OTA Functions --- OTA Functions --- OTA Functions --- OTA Functions --- OTA Functions --- OTA Functions ---
 
-void handleUpdateUpload() {
+void handleUploadOTA() {
   HTTPUpload& upload = webServer.upload();
 
   if (upload.status == UPLOAD_FILE_START) {
@@ -2933,71 +2939,106 @@ void handleUpdateUpload() {
   }
 }
 
-bool handleUrlOTA(const char* host, uint16_t port, const char* path) {
-    Serial.printf("[OTA] Connecting to %s:%u...\n", host, port);
-    if (!wifiClient.connect(host, port)) {
-        Serial.println("[OTA] Connection failed!");
-        return false;
-    }
-
-    // Use wifiClient throughout the function
-    Serial.printf("[OTA] Downloading file %s...\n", path);
-    wifiClient.printf("GET %s HTTP/1.1\r\n", path);
-    wifiClient.printf("Host: %s\r\n", host);
-    wifiClient.println("Connection: close\r\n");
-
-    // Wait for and skip headers
-    while (wifiClient.connected()) {
-        String line = wifiClient.readStringUntil('\n');
-        if (line == "\r") break;
-    }
-
-    // Start OTA with unknown size
-    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
-        Serial.println("[OTA] Not enough space for OTA");
-        return false;
-    }
-
-    Serial.println("[OTA] Starting OTA...");
-
-    uint8_t buff[1024];
-    size_t written = 0;
-
-    // Read until connection closes
-    while (wifiClient.connected() || wifiClient.available()) {
-        size_t len = wifiClient.available();
-        if (len) {
-            int readBytes = wifiClient.read(buff, std::min(len, sizeof(buff)));
-            if (readBytes > 0) {
-                size_t writtenNow = Update.write(buff, readBytes);
-                if (writtenNow != readBytes) {
-                    Serial.println("[OTA] Write error");
-                    return false;
-                }
-                written += writtenNow;
-            }
+bool getLatestGitHubTag() {
+  WiFiClientSecure githubClient;
+  githubClient.setInsecure();
+  HTTPClient https;
+  String url = "https://api.github.com/repos/" + String(otaGithubAccount) + "/" + String(otaGithubRepo) + "/tags";
+  //Serial.println("Fetching tags from: " + url);
+  if (https.begin(githubClient, url)) {
+    https.addHeader("User-Agent", "ESP32");
+    int httpCode = https.GET();
+    if (httpCode == HTTP_CODE_OK) {
+      String payload = https.getString();
+      //Serial.println("GitHub API Response:");
+      //Serial.println(payload);
+      DynamicJsonDocument doc(32768);
+      DeserializationError error = deserializeJson(doc, payload);
+      if (!error && doc.is<JsonArray>()) {
+        JsonArray arr = doc.as<JsonArray>();
+        if (arr.size() > 0 && arr[0].containsKey("name")) {
+          String latestTag = arr[0]["name"].as<String>();
+          //Serial.print("Latest GitHub tag: ");
+          otaLatestGithubVersion = latestTag;
+          return true;
+        } else {
+          //Serial.println("No tags found or invalid format.");
         }
-        delay(1);
+      } else {
+        //Serial.print("JSON parse error: ");
+        //Serial.println(error.c_str());
+      }
+    } else {
+      //Serial.printf("GitHub API request failed: %d\n", httpCode);
     }
+    https.end();
+  } else {
+    //Serial.println("HTTPS connection failed");
+  }
+  return false;
+}
 
-    Serial.printf("[OTA] Written: %u bytes\n", written);
-
-    if (!Update.end(true)) {
-      Serial.printf("[OTA] Update failed: %s\n", Update.errorString());
+bool handleGithubOTA() {
+  if (getLatestGitHubTag()) {
+    WiFiClientSecure client;
+    client.setInsecure();  // Skip certificate validation for testing
+    // Build download URL
+    String url = "https://github.com/" + String(otaGithubAccount) + "/" + String(otaGithubRepo) + "/releases/download/" + otaLatestGithubVersion + "/" + String(otaGithubBinary);
+    Serial.println("Performing OTA update from GitHub");
+    Serial.println("Starting OTA update...");
+    Serial.println("Download URL: " + url);
+    HTTPClient https;
+    if (!https.begin(client, url)) {
+      Serial.println("Failed to begin HTTPS connection");
       return false;
     }
-
-    if (!Update.isFinished()) {
-        Serial.println("[OTA] Update incomplete");
-        return false;
+    // Required to follow GitHub's redirect to the actual binary URL
+    https.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    https.addHeader("User-Agent", "ESP32");
+    int httpCode = https.GET();
+    if (httpCode != HTTP_CODE_OK) {
+      Serial.printf("HTTP GET failed, code: %d\n", httpCode);
+      https.end();
+      return false;
     }
-
-    Serial.println("[OTA] Success! Rebooting...");
+    int contentLength = https.getSize();
+    if (contentLength <= 0) {
+      Serial.println("Invalid content length.");
+      https.end();
+      return false;
+    }
+    if (!Update.begin(contentLength)) {
+     Serial.println("Update.begin() failed");
+      https.end();
+      return false;
+    }
+    WiFiClient* stream = https.getStreamPtr();
+    size_t written = Update.writeStream(*stream);
+    if (written != contentLength) {
+      Serial.printf("Written %d/%d bytes\n", (int)written, contentLength);
+      https.end();
+      return false;
+    }
+    if (!Update.end()) {
+      Serial.println("Update.end() failed");
+      https.end();
+      return false;
+    }
+    if (!Update.isFinished()) {
+      Serial.println("Update not finished");
+      https.end();
+      return false;
+    }
+    Serial.println("OTA update complete. Restarting...");
+    https.end();
     delay(1000);
     ESP.restart();
     return true;
+  } else {
+    Serial.println("Could not determine latest github release");
+    return false;
+  }
 }
-
 
 // --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP ---
 
@@ -3110,9 +3151,18 @@ void setup() {
       Serial.println(config.mqtt_port);
       mqttConnect();
     }
+    Serial.print("Fetching latest GitHub release version...");
+    if (getLatestGitHubTag()) {
+      Serial.print("OK [");
+      Serial.print(otaLatestGithubVersion);
+      Serial.println("]");
+    } else {
+      Serial.println("FAILED");
+    }
   } else {
     Serial.println("Running in offline mode.");
   }
+  delay(300);
   pixel.begin();
   // instantiate listeners and initialize Wiegand reader, configure pins
   wiegand.onReceive(receivedData, "Key read: ");
