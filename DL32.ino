@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 25/05/2025
+  Last updated 26/05/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250525
+#define codeVersion 20250526
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -53,7 +53,7 @@
 #include <WiFiClientSecure.h>   // WifiClientSecure by Evandro Luis Copercini https://git.liberatedsystems.co.uk/jacob.eva/arduino-esp32/src/commit/bcd6dcf5f6f8a4670db53a495ad8c8b556c2a8fa/libraries/WiFiClientSecure
 #include <vector>               // vector library from C++ standard library https://github.com/espressif/arduino-esp32
 #include <algorithm>            // algorithm library from C++ standard library https://github.com/espressif/arduino-esp32
-#include <HTTPClient.h>
+#include <HTTPClient.h>         // HTTPClient by Markus Sattler https://github.com/espressif/arduino-esp32/tree/master/libraries/HTTPClient
 
 // Hardware Rev 20240812 pins [Since codeVersion 20240819]
 #define buzzer_pin 14
@@ -145,7 +145,6 @@ unsigned long lastWifiConnectAttempt = 0;
 unsigned long wifiReconnectInterval = 180000;
 unsigned long mqttReconnectInterval = 180000;
 int add_count = 0;
-int seqTmr = 0;
 int hwRev = 0;
 String scannedKey = "";
 String serialCmd;
@@ -156,14 +155,12 @@ boolean validKeyRead = false;
 boolean forceOffline = false;
 boolean invalidKeyRead = false;
 boolean SD_present = false;
-boolean SD_mounted = false;
 boolean FFat_present = false;
 boolean staticIP = false;
 boolean doorOpen = true;
 boolean failSecure = true;
 boolean add_mode = false;
 boolean garage_mode = false;
-boolean magsr_present = false;
 
 // String holder for html webpage content
 String pageContent = "";
@@ -177,7 +174,7 @@ const char* caCrt_filename = "/ca.crt";
 const char* clCrt_filename = "/client.crt";
 const char* clKey_filename = "/client.key";
 
-// Values for URL OTA (Once Releases are published)
+// Values for GitHub OTA
 const char* otaGithubAccount = "Mark-Roly";
 const char* otaGithubRepo = "dl32-arduino";
 const char* otaGithubBinary = "DL32.bin";
@@ -627,7 +624,6 @@ void sd_setup() {
     return;
   }
   Serial.println("OK");
-  SD_mounted = true;
 }
 
 void checkSDPresent(int verbose) {
@@ -755,7 +751,6 @@ bool renameFile(fs::FS & fs, const char * path1, const char * path2){
 bool deleteFile(fs::FS & fs, const char * path) {
   //Serial.printf("Deleting file: %s...", path);
   if (fs.remove(path)) {
-    playTwinkleDownTone();
     Serial.print("Deleted file ");
     Serial.println(path);
   } else {
@@ -843,14 +838,14 @@ bool loadFSJSON_config(const char* config_filename, Config& config) {
   config.mqtt_enabled = config_doc["mqtt_enabled"] | false;
   strlcpy(config.mqtt_server, config_doc["mqtt_server"] | "null_mqtt_server", sizeof(config.mqtt_server));
   config.mqtt_port = config_doc["mqtt_port"] | 1883;
-  strlcpy(config.mqtt_topic, config_doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_topic));
-  strlcpy(config.mqtt_stat_topic, config_doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_stat_topic));
-  strlcpy(config.mqtt_cmnd_topic, config_doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_cmnd_topic));
-  strlcpy(config.mqtt_keys_topic, config_doc["mqtt_topic"] | "DEFAULT_dl32s3", sizeof(config.mqtt_keys_topic));
+  strlcpy(config.mqtt_topic, config_doc["mqtt_topic"] | "dl32s3", sizeof(config.mqtt_topic));
+  strlcpy(config.mqtt_stat_topic, config_doc["mqtt_topic"] | "dl32s3", sizeof(config.mqtt_stat_topic));
+  strlcpy(config.mqtt_cmnd_topic, config_doc["mqtt_topic"] | "dl32s3", sizeof(config.mqtt_cmnd_topic));
+  strlcpy(config.mqtt_keys_topic, config_doc["mqtt_topic"] | "dl32s3", sizeof(config.mqtt_keys_topic));
   strcat(config.mqtt_stat_topic, "/stat");
   strcat(config.mqtt_cmnd_topic, "/cmnd");
   strcat(config.mqtt_keys_topic, "/keys");
-  strlcpy(config.mqtt_client_name, config_doc["mqtt_client_name"] | "DEFAULT_dl32s3", sizeof(config.mqtt_client_name));
+  strlcpy(config.mqtt_client_name, config_doc["mqtt_client_name"] | "dl32s3", sizeof(config.mqtt_client_name));
   config.mqtt_auth = config_doc["mqtt_auth"] | false;
   config.mqtt_tls = config_doc["mqtt_tls"] | false;
   strlcpy(config.mqtt_user, config_doc["mqtt_user"] | "mqtt", sizeof(config.mqtt_user));
@@ -858,8 +853,8 @@ bool loadFSJSON_config(const char* config_filename, Config& config) {
   config.magsr_present = config_doc["magsr_present"] | false;
   config.ftp_enabled = config_doc["ftp_enabled"] | false;
   config.ftp_port = 21; // current library does not allow argument-defined port
-  strlcpy(config.ftp_user, config_doc["ftp_user"] | "null_ftp_user", sizeof(config.ftp_user));
-  strlcpy(config.ftp_password, config_doc["ftp_password"] | "null_ftp_pass", sizeof(config.ftp_password));
+  strlcpy(config.ftp_user, config_doc["ftp_user"] | "dl32s3", sizeof(config.ftp_user));
+  strlcpy(config.ftp_password, config_doc["ftp_password"] | "dl32s3", sizeof(config.ftp_password));
   config.exitUnlockDur_S = config_doc["exitUnlockDur_S"] | 5;
   config.httpUnlockDur_S = config_doc["httpUnlockDur_S"] | 5;
   config.keyUnlockDur_S = config_doc["keyUnlockDur_S"] | 5;
@@ -876,7 +871,7 @@ bool loadFSJSON_config(const char* config_filename, Config& config) {
 // Loads the addressing from a file
 bool loadFSJSON_addressing(const char* addressing_filename, Addressing& addressing) {
   if (FFat.exists(addressing_filename) == false) {
-    Serial.println("FAILED: Using dynamic addressing");
+    Serial.println("using dynamic addressing");
     return false;
   }
   // Open file for reading
@@ -913,7 +908,7 @@ bool loadFSJSON_addressing(const char* addressing_filename, Addressing& addressi
   strlcpy(addressing.gatewayIP, addressing_doc["gatewayIP"] | "null_wifi_pass", sizeof(addressing.gatewayIP));
   addressing_file.close();
   staticIP = true;
-  Serial.println("Static addressing loaded");
+  Serial.println("static addressing loaded");
   return true;
 }
 
@@ -1439,8 +1434,11 @@ void checkAUX() {
     } else if ((count > 999)&&(count < 1500)) {
       Serial.print("Purging stored keys... ");
       mqttPublish(config.mqtt_stat_topic, "Purging stored keys...");
-      deleteFile(FFat, keys_filename);
-      playTwinkleDownTone();
+      if (deleteFile(FFat, keys_filename)) {
+        playTwinkleDownTone();
+      } else {
+        playUnauthorizedTone();
+      }
       Serial.println("Done");
       mqttPublish(config.mqtt_stat_topic, "Done");
       delay(1000);
@@ -1475,7 +1473,7 @@ void checkBell() {
 
 //Check magnetic sensor for open/closed door state (Optional)
 void checkMagSensor() {
-  if (doorOpen == true && digitalRead(magSensor_pin) == LOW && magsr_present) {
+  if (doorOpen == true && digitalRead(magSensor_pin) == LOW && config.magsr_present) {
     //send not that door has closed
     doorOpen = false;
     Serial.println("Door Closed");
@@ -1484,7 +1482,7 @@ void checkMagSensor() {
     }
     //Serial.print("doorOpen == ");
     //Serial.println(doorOpen);
-  } else if (doorOpen == false && digitalRead(magSensor_pin) == HIGH && magsr_present) {
+  } else if (doorOpen == false && digitalRead(magSensor_pin) == HIGH && config.magsr_present) {
     doorOpen = true;
     Serial.println("Door Opened");
     if (mqttClient.connected()) {
@@ -1520,6 +1518,7 @@ boolean setCurrentBell(String selectedBell) {
     deleteFile(FFat, bell_filename);
   }
   copyFileFFat(fullPath, bell_filename);
+  playTwinkleUpTone();
   loadBellFile();
   return true;
 }
@@ -2038,15 +2037,28 @@ boolean executeCommand(String command) {
   } else if (command.equals("list_keys")) {
     outputKeys();
   } else if (command.equals("purge_addressing")) {
-    deleteFile(FFat, addressing_filename);
+    if (deleteFile(FFat, addressing_filename)) {
+      playTwinkleDownTone();
+    } else {
+      playUnauthorizedTone();
+    }
+    Serial.println("Static addressing purged");
+    mqttPublish(config.mqtt_stat_topic, "Static addressing purged");
   } else if (command.equals("purge_keys")) {
-    deleteFile(FFat, keys_filename);
+    if (deleteFile(FFat, keys_filename)) {
+      playTwinkleDownTone();
+    } else {
+      playUnauthorizedTone();
+    }
     Serial.println("All authorized keys purged");
     mqttPublish(config.mqtt_stat_topic, "All authorized keys purged");
-    playTwinkleDownTone();
   } else if (command.equals("purge_config")) {
-    deleteFile(FFat, config_filename);
-    playTwinkleDownTone();
+    if (deleteFile(FFat, config_filename)) {
+      playTwinkleDownTone();
+    } else {
+      playUnauthorizedTone();
+    }
+    Serial.println("Static addressing purged");
   } else if (command.equals("add_key_mode")) {
     addKeyMode();
   } else if (command.equals("ring_bell")) {
@@ -2067,6 +2079,12 @@ boolean executeCommand(String command) {
     restart();
   } else if (command.equals("reboot")) {
     restart();
+  } else if (command.equals("github_ota")) {
+    if (handleGithubOTA()) {
+      mqttPublish(config.mqtt_stat_topic, "GitHub OTA update completed successfully");
+    } else {
+      mqttPublish(config.mqtt_stat_topic, "GitHub OTA update failed");
+    }
   } else if (command.equals("unlock")) {
     unlock(config.cmndUnlockDur_S);
   } else if ((command.equals("garage_toggle")&& garage_mode)) {
@@ -2277,7 +2295,7 @@ const char* updateScript = R"rawliteral(
       </script>
       <script>
         function startGithubUpdate() {
-          if (!confirm("Start GitHub OTA update?\nDevice will restart after update.")) return;
+          if (!confirm("!!!CAUTION!!!\nThis will initiate a GitHub OTA update!\nDevice will restart after update.\nAre you sure you want to continue?")) return;
           const progress = document.getElementById("progress");
           progress.style.visibility = 'visible';
           progress.value = 5;
@@ -2286,7 +2304,7 @@ const char* updateScript = R"rawliteral(
               progress.value += 5;
             }
           }, 500); // fake smooth progress
-          fetch('/githubOta')
+          fetch('/githubOtaHTTP')
           .then(res => {
             clearInterval(interval);
             progress.value = 100;
@@ -2304,7 +2322,7 @@ const char* updateScript = R"rawliteral(
 const char* updateForm = R"rawliteral(
       <a class="header">Firmware Update</a>
       <br/>
-      <button onclick="startGithubUpdate()">Update from latest GitHub Release</button>
+      <button onclick="startGithubUpdate()">Update to latest GitHub release</button>
       <br/>
       <div class="inputRow">
         <input type="file" name="file" class="firmwareInputFile" id="firmware" required>
@@ -2481,8 +2499,12 @@ void keysFFattoSDHTTP() {
 }
 
 void purgeKeysHTTP() {
-  deleteFile(FFat, keys_filename);
-  playTwinkleDownTone();
+  if (deleteFile(FFat, keys_filename)) {
+    playTwinkleDownTone();
+  } else {
+    playUnauthorizedTone();
+  }
+  Serial.println("Static addressing purged");
   webServer.sendHeader("Location", "/",true);  
   webServer.send(302, "text/plain", "");
 }
@@ -2496,7 +2518,12 @@ void addKeyModeHTTP() {
 void purgeConfigHTTP() {
   webServer.sendHeader("Location", "/",true);  
   webServer.send(302, "text/plain", "");
-  deleteFile(FFat, config_filename);
+    if (deleteFile(FFat, config_filename)) {
+      playTwinkleDownTone();
+    } else {
+      playUnauthorizedTone();
+    }
+    Serial.println("Static addressing purged");
 }
 
 int FFat_file_download(String filename) {
@@ -2530,15 +2557,17 @@ void saveAddressingStaticHTTP() {
   webServer.sendHeader("Location", "/",true);  
   webServer.send(302, "text/plain", "");
   Serial.println("Saving current addressing to static file");
-  if (mqttConnected()) {
-    mqttPublish(config.mqtt_stat_topic, "Saving current addressing to static file");
-  } 
+  mqttPublish(config.mqtt_stat_topic, "Saving current addressing to static file"); 
   JsonDocument addressing_doc;
   addressing_doc["localIP"] = WiFi.localIP().toString();
   addressing_doc["subnetMask"] = WiFi.subnetMask().toString();
   addressing_doc["gatewayIP"] = WiFi.gatewayIP().toString();
   if (FFat.exists(addressing_filename)){
-    deleteFile(FFat, addressing_filename);
+    if (deleteFile(FFat, addressing_filename)) {
+      playTwinkleDownTone();
+    } else {
+      playUnauthorizedTone();
+    }
   }
   File addressing_file = FFat.open(addressing_filename, FILE_WRITE);
   serializeJsonPretty(addressing_doc, addressing_file);
@@ -2552,21 +2581,26 @@ void addressingStaticSDtoFFatHTTP() {
   addressingSDtoFFat();
 }
 
-void githubOta() {
+void githubOtaHTTP() {
   Serial.println("Performing OTA update from GitHub");
   webServer.send(200, "text/plain", "OTA started");
   delay(100);  // Allow time for response to flush before rebooting
-  handleGithubOTA();
+  if (handleGithubOTA()) {
+    mqttPublish(config.mqtt_stat_topic, "GitHub OTA update completed successfully");
+  } else {
+    mqttPublish(config.mqtt_stat_topic, "GitHub OTA update failed");
+  }
 }
 
 void purgeAddressingStaticHTTP() {
   webServer.sendHeader("Location", "/",true);  
   webServer.send(302, "text/plain", "");
-  deleteFile(FFat, addressing_filename);
-  if (mqttConnected()) {
-    mqttPublish(config.mqtt_stat_topic, "Static addressing file purged");
+  if (deleteFile(FFat, addressing_filename)) {
+    playTwinkleDownTone();
+  } else {
+    playUnauthorizedTone();
   }
-  playTwinkleDownTone();
+  mqttPublish(config.mqtt_stat_topic, "Static addressing file purged");
   Serial.println("Static addressing file purged");
 }
 
@@ -2802,7 +2836,7 @@ void startWebServer() {
   webServer.on("/saveAddressingStaticHTTP", saveAddressingStaticHTTP);
   webServer.on("/addressingStaticSDtoFFatHTTP", addressingStaticSDtoFFatHTTP);
   webServer.on("/purgeAddressingStaticHTTP", purgeAddressingStaticHTTP);
-  webServer.on("/githubOta", githubOta);
+  webServer.on("/githubOtaHTTP", githubOtaHTTP);
   webServer.on(UriRegex("/setBell/([\\w\\.\\-]{1,32})"), HTTP_GET, [&]() {
     Serial.print("Setting bell tone from url ");
     Serial.println(webServer.pathArg(0));
@@ -2863,7 +2897,11 @@ void startWebServer() {
   webServer.on(UriRegex("/deleteFile/(.+)"), HTTP_GET, [&]() {
     String encoded = webServer.pathArg(0);
     String path = "/" + urlDecode(encoded);
-    deleteFile(FFat, path.c_str());
+    if (deleteFile(FFat, path.c_str())) {
+      playTwinkleDownTone();
+    } else {
+      playUnauthorizedTone();
+    }
     playTwinkleDownTone();
     webServer.sendHeader("Location", "/",true);
     webServer.send(302, "text/plain", "");
@@ -2984,6 +3022,7 @@ bool handleGithubOTA() {
     client.setInsecure();  // Skip certificate validation for testing
     // Build download URL
     String url = "https://github.com/" + String(otaGithubAccount) + "/" + String(otaGithubRepo) + "/releases/download/" + otaLatestGithubVersion + "/" + String(otaGithubBinary);
+    mqttPublish(config.mqtt_stat_topic, "Performing OTA update from GitHub");
     Serial.println("Performing OTA update from GitHub");
     Serial.println("Starting OTA update...");
     Serial.println("Download URL: " + url);
@@ -3029,10 +3068,11 @@ bool handleGithubOTA() {
       https.end();
       return false;
     }
-    Serial.println("OTA update complete. Restarting...");
+    Serial.println("OTA update complete");
+    mqttPublish(config.mqtt_stat_topic, "OTA update complete");
     https.end();
     delay(1000);
-    ESP.restart();
+    restart();
     return true;
   } else {
     Serial.println("Could not determine latest github release");
@@ -3044,7 +3084,7 @@ bool handleGithubOTA() {
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
+  //delay(1500);
   Serial.println("");
   Serial.println("======================");
   Serial.println("|  STARTUP SEQUENCE  |");
@@ -3124,7 +3164,6 @@ void setup() {
   }
   if (config.magsr_present) {
     Serial.println("Door state sensor enabled");
-    magsr_present = true;
   } else {
     Serial.println("Door state sensor disabled");
   }
@@ -3151,11 +3190,25 @@ void setup() {
       Serial.println(config.mqtt_port);
       mqttConnect();
     }
-    Serial.print("Fetching latest GitHub release version...");
+    Serial.print("Checking latest GitHub release version...");
     if (getLatestGitHubTag()) {
       Serial.print("OK [");
       Serial.print(otaLatestGithubVersion);
       Serial.println("]");
+      if (codeVersion == otaLatestGithubVersion.toInt()) {
+        Serial.print("You are running the latest firmware release");
+        Serial.println(codeVersion);
+      } else if (codeVersion < otaLatestGithubVersion.toInt()) {
+        Serial.print("There is an updated firmware release available on GitHub: ");
+        Serial.println(otaLatestGithubVersion);
+      } else if (codeVersion > otaLatestGithubVersion.toInt()) {
+        Serial.print("You are running newer firmware [");
+        Serial.print(codeVersion);
+        Serial.print("]");
+        Serial.print(" than the latest GitHub release [");
+        Serial.print(otaLatestGithubVersion);
+        Serial.println("]");
+      }
     } else {
       Serial.println("FAILED");
     }
