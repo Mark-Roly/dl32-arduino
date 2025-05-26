@@ -61,8 +61,8 @@ See descriptions of each parameter below:
 - wifi_password (string) Password for wifi network connection
 - mqtt_enabled (boolean, false) Dictates whether or not the onboard mqtt client is enabled 
 - mqtt_server (string) Hostname or IP address of remote mqtt broker
-- mqtt_topic (string, "DEFAULT_dl32s3") mqtt topic base to use for sub topics
-- mqtt_client_name (string, "DEFAULT_dl32s3") Client name to use for mqtt connection
+- mqtt_topic (string, "dl32s3") mqtt topic base to use for sub topics
+- mqtt_client_name (string, "dl32s3") Client name to use for mqtt connection
 - mqtt_tls (boolean, false) Dictates whether connection to the broker uses tls private key authentication (Disregards mqtt_auth, mqtt_user and mqtt_password when true. Requires 3x cert/key files. See doc)
 - mqtt_auth (boolean, false) Dictates whether username/password credentials should be used for mqtt connection. Not valid when mqtt_tls is enabled.
 - mqtt_user (string) Username for mqtt broker connection. Not valid when mqtt_tls is enabled.
