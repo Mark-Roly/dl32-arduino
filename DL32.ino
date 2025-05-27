@@ -116,6 +116,10 @@ struct Config {
   int addKeyTimeoutDur_S;
 };
 
+// Variables for FreeRTOS non-blocking bell task
+TaskHandle_t bellTaskHandle = nullptr;
+String bellTaskSequence = "";
+
 struct NoteEvent {
   int tick;
   note_t note;
@@ -217,6 +221,9 @@ PubSubClient mqttClient_tls(wifiClient_tls);
 void restart() {
   Serial.println("Restarting...");
   mqttPublish(config.mqtt_stat_topic, "Restarting...");
+  if (client_cert) free(client_cert);
+  if (client_key) free(client_key);
+  if (ca_cert) free(ca_cert);
   delay(1000);
   ESP.restart();
 }
@@ -1494,6 +1501,16 @@ void checkMagSensor() {
 
 // --- Buzzer Functions --- Buzzer Functions --- Buzzer Functions --- Buzzer Functions --- Buzzer Functions --- Buzzer Functions ---
 
+void bellTask(void* parameter) {
+  String sequence = *(String*)parameter;
+  delete (String*)parameter;  // Free heap
+
+  parseAndPlaySequence(sequence);
+
+  bellTaskHandle = nullptr;  // Mark as complete
+  vTaskDelete(nullptr);      // Delete self
+}
+
 void loadBellFile() {
   File file = FFat.open(bell_filename);
   bellFile = "";
@@ -1541,10 +1558,10 @@ note_t parseNote(const String& noteStr) {
 }
 
 boolean checkStopBell() {
-  if ((digitalRead(exitButton_pin) == LOW) || (digitalRead(IO0) == LOW) || (digitalRead(AUXButton_pin) == LOW) || (digitalRead(bellButton_pin) == LOW)) {
-    return true;
-  }
-  return false;
+  return digitalRead(exitButton_pin) == LOW || 
+         digitalRead(IO0) == LOW || 
+         digitalRead(AUXButton_pin) == LOW || 
+         digitalRead(bellButton_pin) == LOW;
 }
 
 // Sorting helper
@@ -1603,6 +1620,11 @@ void parseAndPlaySequence(const String& sequence) {
   std::sort(noteEvents.begin(), noteEvents.end(), compareNoteEvents);
   int currentTick = -1;
   for (const auto& evt : noteEvents) {
+    if (checkStopBell()) {
+      Serial.println("Bell interrupted before delay");
+      mqttPublish(config.mqtt_stat_topic, "Bell interrupted");
+      return;
+    }
     if (currentTick != -1 && evt.tick > currentTick) {
       int tickDelta = evt.tick - currentTick;
       for(int i=0; i<tickMs; i++) {
@@ -1613,6 +1635,11 @@ void parseAndPlaySequence(const String& sequence) {
           return;
         }
       }
+    }
+    if (checkStopBell()) {
+      Serial.println("Bell interrupted before note");
+      mqttPublish(config.mqtt_stat_topic, "Bell interrupted");
+      return;
     }
     playNote(evt.note, evt.octave, evt.dur);
     currentTick = evt.tick;
@@ -1743,9 +1770,23 @@ void playBellFile(String filename) {
 
 void ringBell() {
   if (digitalRead(DS03) == HIGH) {
-    Serial.println("Ringing Bell");
-    mqttPublish(config.mqtt_stat_topic, "Ringing Bell");
-    parseAndPlaySequence(bellFile);
+    if (bellTaskHandle == nullptr) {
+      Serial.println("Ringing bell");
+      mqttPublish(config.mqtt_stat_topic, "Ringing bell");
+
+      String* taskSequence = new String(bellFile);  // Allocate on heap
+      xTaskCreatePinnedToCore(
+        bellTask,          // Task function
+        "bellTask",        // Name
+        4096,              // Stack size
+        taskSequence,      // Param
+        1,                 // Priority (low)
+        &bellTaskHandle,   // Handle
+        1                  // Core (1 to stay off WiFi core)
+      );
+    } else {
+      Serial.println("Bell is already playing.");
+    }
   } else {
     Serial.println("Cannot ring bell in silent mode");
     mqttPublish(config.mqtt_stat_topic, "Cannot ring bell in silent mode");
@@ -1787,9 +1828,16 @@ void playRandomTone() {
 // Load credentials and apply to WiFiClientSecure instance wifiClient_tls
 bool loadTLSClient() {
   Serial.print("Loading TLS client crt and key...");
+  if (client_cert) {
+    free(client_cert);
+    client_cert = nullptr;
+  }
+  if (client_key) {
+    free(client_key);
+    client_key = nullptr;
+  }
   client_cert = readFileToBuffer(clCrt_filename); // Client certificate
   client_key = readFileToBuffer(clKey_filename); // Client private key
-
   if (!client_cert) {
     Serial.print("FAILED: file ");
     Serial.print(clCrt_filename);
@@ -1811,6 +1859,10 @@ bool loadTLSClient() {
 // Load credentials and apply to WiFiClientSecure instance wifiClient_tls
 bool loadTLSCA() {
   Serial.print("Loading TLS CA certificate...");
+  if (ca_cert) {
+    free(ca_cert);
+    ca_cert = nullptr;
+  }
   ca_cert = readFileToBuffer(caCrt_filename); // Broker root certificate
   if (!ca_cert) {
     Serial.print("FAILED: file ");
@@ -2948,6 +3000,9 @@ void handleUploadOTA() {
   } 
   else if (upload.status == UPLOAD_FILE_END) {
     if (Update.end(true)) { // true to set the size automatically
+      if (client_cert) free(client_cert);
+      if (client_key) free(client_key);
+      if (ca_cert) free(ca_cert);
       Serial.printf("Update Success: %u bytes\nRebooting...\n", upload.totalSize);
     } else {
       Update.printError(Serial);
