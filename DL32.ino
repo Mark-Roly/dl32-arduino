@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 26/05/2025
+  Last updated 27/05/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250526
+#define codeVersion 20250527
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -1453,7 +1453,6 @@ void checkAUX() {
       Serial.println("Factory reset complete.");
       mqttPublish(config.mqtt_stat_topic, "Factory reset complete.");
       restart();
-      delay(3000);
     }
     setPixBlue();
     return;
@@ -2165,6 +2164,11 @@ void removeNewlines(char* str) {
   str[writeIndex] = '\0'; // Null-terminate the cleaned string
 }
 
+void redirectHome() {
+  webServer.sendHeader("Location", "/", true);
+  webServer.send(302, "text/plain", "");
+}
+
 void handleNotFound() {
   String message = "File Not Found\n\n";
   message += "URI: ";
@@ -2192,8 +2196,7 @@ void outputKeys() {
 
 // Restart unit
 void restartESPHTTP() {
-  webServer.sendHeader("Location", "/",true);  
-  webServer.send(302, "text/plain", "");
+  redirectHome();
   delay(1000);
   restart();
 }
@@ -2377,11 +2380,11 @@ void displayFiles() {
       pageContent += "\")'>VIEW</a>";
       pageContent += "</td><td class='fileMgCell'>";
       pageContent += "<a class='fileMgLink' href='/downloadFile/";
-      pageContent += (name + " ");
+      pageContent += name;
       pageContent += "'>DLOAD</a>";
       pageContent += "</td><td class='fileMgCell'>";
       pageContent += "<a class='fileMgLink' href='/deleteFile/";
-      pageContent += (name + " ");
+      pageContent += name;
       pageContent += "'>DEL</a>";
       pageContent += "</td>";
       pageContent += "</tr>\n";
@@ -2412,8 +2415,7 @@ void outputConfig() {
   while (outFile.available()) {
     Serial.write(outFile.read());
   }
-  webServer.sendHeader("Location", "/",true);
-  webServer.send(302, "text/plain", "");
+  redirectHome();
 }
 
 void MainPage() {
@@ -2431,8 +2433,7 @@ void MainPage() {
 }
 
 void unlockHTTP() {
-  webServer.sendHeader("Location", "/",true);  
-  webServer.send(302, "text/plain", "");
+  redirectHome();
   Serial.println("Unlocked via HTTP");
   if (mqttConnected()) {
     mqttPublish(config.mqtt_stat_topic, "HTTP Unlock");
@@ -2441,8 +2442,7 @@ void unlockHTTP() {
 }
 
 void garageToggleHTTP() {
-  webServer.sendHeader("Location", "/",true);  
-  webServer.send(302, "text/plain", "");
+  redirectHome();
   Serial.println("Garage Door toggled HTTP");
   if (mqttConnected()) {
     mqttPublish(config.mqtt_stat_topic, "Garage Door toggled HTTP");
@@ -2451,8 +2451,7 @@ void garageToggleHTTP() {
 }
 
 void garageOpenHTTP() {
-  webServer.sendHeader("Location", "/",true);  
-  webServer.send(302, "text/plain", "");
+  redirectHome();
   if (doorOpen == false) {
     Serial.println("Garage Door opened HTTP");
     if (mqttConnected()) {
@@ -2463,8 +2462,7 @@ void garageOpenHTTP() {
 }
 
 void garageCloseHTTP() {
-  webServer.sendHeader("Location", "/",true);  
-  webServer.send(302, "text/plain", "");
+  redirectHome();
   if (doorOpen) {
     Serial.println("Garage Door closed via HTTP");
     if (mqttConnected()) {
@@ -2476,25 +2474,21 @@ void garageCloseHTTP() {
 
 void configSDtoFFatHTTP() {
   configSDtoFFat();
-  webServer.sendHeader("Location", "/",true);
-  webServer.send(302, "text/plain", "");
+  redirectHome();
 }
 
 void configFFattoSDHTTP() {
-  webServer.sendHeader("Location", "/",true);
-  webServer.send(302, "text/plain", "");
+  redirectHome();
   configFFattoSD();
 }
 
 void keysSDtoFFatHTTP() {
-  webServer.sendHeader("Location", "/",true);  
-  webServer.send(302, "text/plain", "");
+  redirectHome();
   keysSDtoFFat();
 }
 
 void keysFFattoSDHTTP() {
-  webServer.sendHeader("Location", "/",true);  
-  webServer.send(302, "text/plain", "");
+  redirectHome();
   keysFFattoSD();
 }
 
@@ -2505,25 +2499,22 @@ void purgeKeysHTTP() {
     playUnauthorizedTone();
   }
   Serial.println("Static addressing purged");
-  webServer.sendHeader("Location", "/",true);  
-  webServer.send(302, "text/plain", "");
+  redirectHome();
 }
 
 void addKeyModeHTTP() {
-  webServer.sendHeader("Location", "/",true);  
-  webServer.send(302, "text/plain", "");
+  redirectHome();
   addKeyMode();
 }
 
 void purgeConfigHTTP() {
-  webServer.sendHeader("Location", "/",true);  
-  webServer.send(302, "text/plain", "");
-    if (deleteFile(FFat, config_filename)) {
-      playTwinkleDownTone();
-    } else {
-      playUnauthorizedTone();
-    }
-    Serial.println("Static addressing purged");
+  redirectHome();
+  if (deleteFile(FFat, config_filename)) {
+    playTwinkleDownTone();
+  } else {
+    playUnauthorizedTone();
+  }
+  Serial.println("Static addressing purged");
 }
 
 int FFat_file_download(String filename) {
@@ -2544,8 +2535,7 @@ int FFat_file_download(String filename) {
 }
 
 void ringBellHTTP() {
-  webServer.sendHeader("Location", "/",true);
-  webServer.send(302, "text/plain", "");
+  redirectHome();
   ringBell();
 }
 
@@ -2554,8 +2544,7 @@ int parseSDAddressingFile () {
 }
 
 void saveAddressingStaticHTTP() {
-  webServer.sendHeader("Location", "/",true);  
-  webServer.send(302, "text/plain", "");
+  redirectHome();
   Serial.println("Saving current addressing to static file");
   mqttPublish(config.mqtt_stat_topic, "Saving current addressing to static file"); 
   JsonDocument addressing_doc;
@@ -2576,8 +2565,7 @@ void saveAddressingStaticHTTP() {
 }
 
 void addressingStaticSDtoFFatHTTP() {
-  webServer.sendHeader("Location", "/",true);
-  webServer.send(302, "text/plain", "");
+  redirectHome();
   addressingSDtoFFat();
 }
 
@@ -2593,8 +2581,7 @@ void githubOtaHTTP() {
 }
 
 void purgeAddressingStaticHTTP() {
-  webServer.sendHeader("Location", "/",true);  
-  webServer.send(302, "text/plain", "");
+  redirectHome();
   if (deleteFile(FFat, addressing_filename)) {
     playTwinkleDownTone();
   } else {
@@ -2626,6 +2613,7 @@ void sendHTMLStop() {
 }
 
 const char* html_head = R"rawliteral(
+<!-- DL32 Project by Mark-Roly https://github.com/Mark-Roly/dl32-arduino -->
 <!DOCTYPE html>
 <html>
   <head>
@@ -2738,7 +2726,7 @@ void siteButtons() {
   pageContent += "      <a class='header'>System</a>\n";
   pageContent += "      <a href='/downloadFile";
   pageContent += config_filename;
-  pageContent += "      '><button>Download config file</button></a>\n";
+  pageContent += "'><button>Download config file</button></a>\n";
   pageContent += "      <br/>\n";
   pageContent += "      <a href='/configSDtoFFatHTTP'><button>Upload config SD to DL32</button></a>\n";
   pageContent += "      <br/>\n";
@@ -2767,7 +2755,7 @@ void siteButtons() {
   pageContent += "      <a class='header'>Key Management</a>\n";
   pageContent += "      <a href='/downloadFile";
   pageContent += keys_filename;
-  pageContent += "      ''><button>Download key file</button></a>\n";
+  pageContent += "'><button>Download key file</button></a>\n";
   pageContent += "      <br/>\n";
   pageContent += "      <a href='/keysSDtoFFatHTTP'><button>Upload keys SD to DL32</button></a>\n";
   pageContent += "      <br/>\n";
@@ -2841,28 +2829,24 @@ void startWebServer() {
     Serial.print("Setting bell tone from url ");
     Serial.println(webServer.pathArg(0));
     setCurrentBell(webServer.pathArg(0));
-    webServer.sendHeader("Location", "/",true);
-    webServer.send(302, "text/plain", "");
+    redirectHome();
   });
   webServer.on("/setFormBell/", HTTP_GET, [&]() {
     if (webServer.hasArg("play")) {
       Serial.print("Playing bell: ");
       Serial.println(webServer.arg("targetBell"));
       playBellFile("/" + webServer.arg("targetBell"));
-      webServer.sendHeader("Location", "/",true);
-      webServer.send(302, "text/plain", "");
+      redirectHome();
     } else if (webServer.hasArg("select")) {
       Serial.print("Setting bell tone from WebUI: ");
       Serial.println(webServer.arg("targetBell"));
       setCurrentBell(webServer.arg("targetBell"));
-      webServer.sendHeader("Location", "/",true);
-      webServer.send(302, "text/plain", "");
+      redirectHome();
     }
   });
   webServer.on(UriRegex("/addKey/([0-9a-zA-Z]{4,8})"), HTTP_GET, [&]() {
     writeKey(webServer.pathArg(0));
-    webServer.sendHeader("Location", "/",true);
-    webServer.send(302, "text/plain", "");
+    redirectHome();
   });
   webServer.on("/update_post", HTTP_POST, []() {
     webServer.sendHeader("Connection", "close");
@@ -2876,8 +2860,7 @@ void startWebServer() {
   }, handleUploadOTA);
   webServer.on(UriRegex("/remKey/([0-9a-zA-Z]{3,16})"), HTTP_GET, [&]() {
     removeKey(webServer.pathArg(0));
-    webServer.sendHeader("Location", "/",true);
-    webServer.send(302, "text/plain", "");
+    redirectHome();
   });
   webServer.on(UriRegex("/previewFile/([\\w\\.\\-]{1,32})"), HTTP_GET, [&]() {
     previewFile(webServer.pathArg(0));
@@ -2902,20 +2885,16 @@ void startWebServer() {
     } else {
       playUnauthorizedTone();
     }
-    playTwinkleDownTone();
-    webServer.sendHeader("Location", "/",true);
-    webServer.send(302, "text/plain", "");
+    redirectHome();
   });
   webServer.on(UriRegex("/serial/([0-9a-zA-Z_-]{3,10})"), HTTP_GET, [&]() {
     Serial.print("URL Command entered: ");
     Serial.print(webServer.pathArg(0));
     executeCommand(webServer.pathArg(0));
-    webServer.sendHeader("Location", "/",true);
-    webServer.send(302, "text/plain", "");
+    redirectHome();
   });
   webServer.on("/upload", HTTP_POST, []() {
-    webServer.sendHeader("Location", "/",true);
-    webServer.send(302, "text/plain", "");
+    redirectHome();
     playTwinkleUpTone();
   }, handleFileUpload);
   webServer.on("/", MainPage);
@@ -2924,8 +2903,7 @@ void startWebServer() {
     Serial.print(webServer.arg("key"));
     Serial.println(" from webUI input.");
     writeKey(webServer.arg("key"));
-    webServer.sendHeader("Location", "/",true);
-    webServer.send(302, "text/plain", "");
+    redirectHome();
   });
   webServer.begin();
   if (WiFi.status() == WL_CONNECTED) {
@@ -3196,8 +3174,9 @@ void setup() {
       Serial.print(otaLatestGithubVersion);
       Serial.println("]");
       if (codeVersion == otaLatestGithubVersion.toInt()) {
-        Serial.print("You are running the latest firmware release");
-        Serial.println(codeVersion);
+        Serial.print("You are running the latest firmware release [");
+        Serial.print(codeVersion);
+        Serial.println("]");
       } else if (codeVersion < otaLatestGithubVersion.toInt()) {
         Serial.print("There is an updated firmware release available on GitHub: ");
         Serial.println(otaLatestGithubVersion);
