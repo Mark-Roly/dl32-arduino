@@ -24,7 +24,7 @@ The easiest way to perform initial configuration, is by transferring your config
 
 Use the below sample dl32.json configuration as a base:
  ```   
-// Configuration file for DL32-S3
+// Sample configuration file for DL32-S3 dl32.json
 // https://github.com/Mark-Roly/dl32-arduino
 // Minimum firmware revision 20250424
 {
@@ -36,54 +36,45 @@ Use the below sample dl32.json configuration as a base:
     "mqtt_topic": "DL32",
     "mqtt_client_name": "DL32",
     "mqtt_tls": false,
-    "mqtt_auth": false,
+    "mqtt_auth": true,
     "mqtt_user": "mqttuser",
     "mqtt_password": "mqttpass",
     "magsr_present" : true,
     "ftp_enabled": false,
     "ftp_user": "ftpuser",
     "ftp_password": "ftppass",
-    "exitUnlockDur_S": 5,
-    "httpUnlockDur_S": 5,
-    "keyUnlockDur_S": 5,
-    "cmndUnlockDur_S": 5,
-    "badKeyLockoutDur_S": 2,
-    "exitButMinThresh_Ms": 50,
-    "keyWaitDur_Ms": 1500,
-    "garageMomentaryDur_Ms": 500,
-    "addKeyTimeoutDur_S": 10
 }
 ```
 
-See descriptions of each parameter below:
+See descriptions of supported configuration parameters below:
 
-- **[param name]** ([datatype], [default val]) [description]
-```
-- wifi_enabled (boolean, false) Dictates whether or not the onboard mqtt client is enabled 
-- wifi_ssid (string) SSID for wifi network connection
-- wifi_password (string) Password for wifi network connection
-- mqtt_enabled (boolean, false) Dictates whether or not the onboard mqtt client is enabled 
-- mqtt_server (string) Hostname or IP address of remote mqtt broker
-- mqtt_topic (string, "dl32s3") mqtt topic base to use for sub topics
-- mqtt_client_name (string, "dl32s3") Client name to use for mqtt connection
-- mqtt_tls (boolean, false) Dictates whether connection to the broker uses tls private key authentication (Disregards mqtt_auth, mqtt_user and mqtt_password when true. Requires 3x cert/key files. See doc)
-- mqtt_auth (boolean, false) Dictates whether username/password credentials should be used for mqtt connection. Not valid when mqtt_tls is enabled.
-- mqtt_user (string) Username for mqtt broker connection. Not valid when mqtt_tls is enabled.
-- mqtt_password (string) Password for mqtt broker connection. Not valid when mqtt_tls is enabled.
-- magsr_present (boolean, false) Dictates whether or not a connected magnetic door sensor should be used 
-- ftp_enabled (boolean, false) Dictates whether or not the onboard ftp service is enabled 
-- ftp_user (string) Username for ftp connections
-- ftp_password (string) Password for ftp connections
-- exitUnlockDur_S (integer, 5) Time in seconds that the lock will remain unlocked for when exit button is pressed
-- httpUnlockDur_S (integer, 5) Time in seconds that the lock will remain unlocked for when WebUI unlock is performed
-- keyUnlockDur_S (integer, 5)  Time in seconds that the lock will remain unlocked for when valid RFID key is read
-- cmndUnlockDur_S (integer, 5) Time in seconds that the lock will remain unlocked for when url/mqtt/serial unlock command is sent
-- badKeyLockoutDur_S (integer, 5) Time in seconds that the unit will turn unresponsive for with the red led illuminated when an unauthorized key is read
-- exitButMinThresh_Ms (integer, 50) Minimum time in miliseconds that the exit button must be pressed for to register an unlock
-- keyWaitDur_Ms (integer, 1500) Timeout in miliseconds between keypad digits eg: max time between button presses for keypad input
-- garageMomentaryDur_Ms (integer, 500) Time in miliseconds that the momentary signal will be on when in garage mode
-- addKeyTimeoutDur_S (integer, 10) Time in seconds that the unit will await a new card when in Key Add Mode before timing out
-```
+<table width="1050">
+<tr><th width="140">Attribute</th><th width="150">Type, default val</th><th width="660">Description</th></tr>
+<tr><td width="140">wifi_enabled</td><td width="150">(bool, false)</td><td width="660">Dictates whether or not the onboard mqtt client is enabled</td></tr>
+<tr><td width="140">wifi_ssid</td><td width="150">(string)</td><td width="660">SSID for wifi network connection</td></tr>
+<tr><td width="140">wifi_password</td><td width="150">(string)</td><td width="660">Password for wifi network connection</td></tr>
+<tr><td width="140">mqtt_enabled</td><td width="150">(bool, false)</td><td width="660">Dictates whether or not the onboard mqtt client is enabled</td></tr>
+<tr><td width="140">mqtt_server</td><td width="150">(string)</td><td width="660">Hostname or IP address of remote mqtt broker</td></tr>
+<tr><td width="140">mqtt_topic</td><td width="150">(string, "dl32s3")</td><td width="660">mqtt topic base to use for sub topics</td></tr>
+<tr><td width="140">mqtt_client_name</td><td width="150">(string, "dl32s3")</td><td width="660">Client name to use for mqtt connection</td></tr>
+<tr><td width="140">mqtt_tls</td><td width="150">(bool, false)</td><td width="660">Dictates whether connection to the broker uses tls private key authentication (Disregards mqtt_auth, mqtt_user and mqtt_password when true. Requires 3x cert/key files. See doc)</td></tr>
+<tr><td width="140">mqtt_auth</td><td width="150">(bool, false)</td><td width="660">Dictates whether username/password credentials should be used for mqtt connection. Not valid when mqtt_tls is enabled.</td></tr>
+<tr><td width="140">mqtt_user</td><td width="150">(string, &ldquo;dl32s3&rdquo;)</td><td width="660">Username for mqtt broker connection. Not valid when mqtt_tls is enabled.</td></tr>
+<tr><td width="140">mqtt_password</td><td width="150">(string, &ldquo;dl32s3&rdquo;)</td><td width="660">Password for mqtt broker connection. Not valid when mqtt_tls is enabled.</td></tr>
+<tr><td width="140">magsr_present</td><td width="150">(bool, false)</td><td width="660">Dictates whether or not a connected magnetic door sensor should be used</td></tr>
+<tr><td width="140">ftp_enabled</td><td width="150">(bool, false)</td><td width="660">Dictates whether or not the onboard ftp service is enabled</td></tr>
+<tr><td width="140">ftp_user</td><td width="150">(string, &ldquo;dl32s3&rdquo;)</td><td width="660">Username for ftp connections</td></tr>
+<tr><td width="140">ftp_password</td><td width="150">(string, &ldquo;dl32s3&rdquo;)</td><td width="660">Password for ftp connections</td></tr>
+<tr><td width="140">exitUnlockDur_S</td><td width="150">(bool, 5)</td><td width="660">Time in seconds that the lock will remain unlocked for when exit button is pressed</td></tr>
+<tr><td width="140">httpUnlockDur_S</td><td width="150">(bool, 5)</td><td width="660">Time in seconds that the lock will remain unlocked for when Web UI unlock is performed</td></tr>
+<tr><td width="140">keyUnlockDur_S</td><td width="150">(bool, 5)</td><td width="660">Time in seconds that the lock will remain unlocked for when valid RFID key is read</td></tr>
+<tr><td width="140">cmndUnlockDur_S</td><td width="150">(bool, 5)</td><td width="660">Time in seconds that the lock will remain unlocked for when url/mqtt/serial unlock command is sent</td></tr>
+<tr><td width="140">badKeyLockoutDur_S</td><td width="150">(bool, 5)</td><td width="660">Time in seconds that the unit will turn unresponsive for with the red led illuminated when an unauthorized key is read</td></tr>
+<tr><td width="140">exitButMinThresh_Ms</td><td width="150">(bool, 50)</td><td width="660">Minimum time in miliseconds that the exit button must be pressed for to register an unlock</td></tr>
+<tr><td width="140">keyWaitDur_Ms</td><td width="150">(bool, 1500)</td><td width="660">Timeout in miliseconds between keypad digits eg: max time between button presses for keypad input</td></tr>
+<tr><td width="140">garageMomentaryDur_Ms</td><td width="150">(bool, 500)</td><td width="660">Time in miliseconds that the momentary signal will be on when in garage mode</td></tr>
+<tr><td width="140">addKeyTimeoutDur_S</td><td width="150">(bool, 10)</td><td width="660">Time in seconds that the unit will await a new card when in Key Add Mode before timing out</td></tr>
+</table>
 
 ### Flashing configuration to the unit
 - Insert the SD card into the slot
