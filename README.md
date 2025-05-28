@@ -4,15 +4,15 @@
     The ESP32 powered smart door lock controller
     <br />
   </p>
-**NOTE:** The current version of Adafruit_Neopixel.h is causeing multiple models of ESP32 C3, C6, and *S3* (On which the DL32-S3 is based) to throw RMT errors and crash.
-The bug is being tracked at https://github.com/adafruit/Adafruit_NeoPixel/issues/432
-1.12.4-current are affected. In the interim, please use version 1.12.3
+<p>**NOTE:** The current version of Adafruit_Neopixel.h is causing multiple models of ESP32 C3, C6, and *S3* (On which the DL32-S3 is based) to throw RMT errors and crash.
+The bug is being tracked at <a href="https://github.com/adafruit/Adafruit_NeoPixel/issues/432">here</a><br/>
+1.12.4-current are affected. In the interim, please use version 1.12.3<br/></p>
 
 <!-- ABOUT THE PROJECT -->
 ## About The Project
-An ongoing effort to create the perfect smart lock.<br/>
-In short, the DL32-S3 is a smart lock controller that can be interacted with via RFID, keypad, MQTT, HTTP, FTP, Serial, and supports a varierty of accessories.
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+An ongoing effort to create the perfect smart lock.<br/><br/>
+In short, the DL32-S3 is a smart lock controller that can be interacted with via RFID, keypad, MQTT, HTTP, FTP, Serial, and supports a varierty of accessories. It has a fully-featured web interface and supports OTS updates.<br/><br/>
+You can download the full user manual <a href="https://github.com/Mark-Roly/dl32-arduino/releases/latest/download/DL32-S3_UserManual.pdf">here</a>.
 
 <!-- GETTING STARTED -->
 ## Getting Started
