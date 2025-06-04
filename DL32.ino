@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 27/05/2025
+  Last updated 04/06/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250527
+#define codeVersion 20250604
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -56,16 +56,16 @@
 #include <HTTPClient.h>         // HTTPClient by Markus Sattler https://github.com/espressif/arduino-esp32/tree/master/libraries/HTTPClient
 
 // Hardware Rev 20240812 pins [Since codeVersion 20240819]
-#define buzzer_pin 14
-#define neopix_pin 47
-#define lockRelay_pin 1
-#define AUXButton_pin 6
-#define exitButton_pin 21
-#define bellButton_pin 17
-#define magSensor_pin 15
 #define attSensor_pin 9
-#define wiegand_0_pin 16
-#define wiegand_1_pin 18
+#define def_buzzer_pin 14
+#define def_neopix_pin 47
+#define def_lockRelay_pin 1
+#define def_AUXButton_pin 6
+#define def_exitButton_pin 21
+#define def_bellButton_pin 17
+#define def_magSensor_pin 15
+#define def_wiegand_0_pin 16
+#define def_wiegand_1_pin 18
 #define DS01 33
 #define DS02 37
 #define DS03 5
@@ -82,6 +82,8 @@
 #define SD_MOSI_PIN 36
 #define SD_MISO_PIN 35
 #define SD_CD_PIN 7
+
+int gh[] = {0, 2, 4, 12, 13, 8, 11};
 
 // Define struct for storing configuration
 struct Config {
@@ -114,6 +116,15 @@ struct Config {
   int keyWaitDur_Ms;
   int garageMomentaryDur_Ms;
   int addKeyTimeoutDur_S;
+  int buzzer_pin;
+  int neopix_pin;
+  int lockRelay_pin;
+  int AUXButton_pin;
+  int exitButton_pin;
+  int bellButton_pin;
+  int magSensor_pin;
+  int wiegand_0_pin;
+  int wiegand_1_pin;
 };
 
 // Variables for FreeRTOS non-blocking bell task
@@ -200,14 +211,12 @@ String bellFile;
 // integer for watchdog counter
 volatile int watchdogCount = 0;
 
-// Define onboard and offvoard neopixels
-Adafruit_NeoPixel pixel = Adafruit_NeoPixel(NUMPIXELS, neopix_pin, NEO_GRB + NEO_KHZ800);
-
 // instantiate objects for Configuration struct, addressing struct, wifi client, webserver, mqtt client, Wiegand reader and WDT timer
 Config config;
 Addressing addressing;
 WiFiClient wifiClient;
 WiFiClientSecure wifiClient_tls;
+Adafruit_NeoPixel pixel;
 WebServer webServer(80);
 File uploadFile;
 Wiegand wiegand;
@@ -336,6 +345,34 @@ void publishStorage() {
     storagePayload += "SD space: " + formatNumber(SD.usedBytes()/1024) + "kB of " + formatNumber(SD.totalBytes()/1024) + "kB used";
   }
   mqttPublish(config.mqtt_stat_topic, storagePayload.c_str());
+}
+
+// --- GPIO Header translation Functions --- GPIO Header translation Functions --- GPIO Header translation Functions --- GPIO Header translation Functions --- GPIO Header translation Functions ---
+
+int returnGHpin(int GHpin, int defaultPin) {
+  switch (GHpin) {
+    case 1:
+      return gh[1];
+      break;
+    case 2:
+      return gh[2];
+      break;
+    case 3:
+      return gh[3];
+      break;
+    case 4:
+      return gh[4];
+      break;
+    case 5:
+      return gh[5];
+      break;
+    case 6:
+      return gh[6];
+      break;
+    default:
+      return defaultPin;
+      break;
+  }
 }
 
 // --- Wiegand Functions --- Wiegand Functions --- Wiegand Functions --- Wiegand Functions --- Wiegand Functions --- Wiegand Functions --- Wiegand Functions ---
@@ -576,8 +613,8 @@ void checkKey() {
 
 // When any of the pins have changed, update the state of the wiegand library
 void pinStateChanged() {
-  wiegand.setPin0State(digitalRead(wiegand_0_pin));
-  wiegand.setPin1State(digitalRead(wiegand_1_pin));
+  wiegand.setPin0State(digitalRead(config.wiegand_0_pin));
+  wiegand.setPin1State(digitalRead(config.wiegand_1_pin));
 }
 
 // Notifies when a reader has been connected or disconnected.
@@ -871,6 +908,15 @@ bool loadFSJSON_config(const char* config_filename, Config& config) {
   config.keyWaitDur_Ms = config_doc["keyWaitDur_Ms"] | 1500;
   config.garageMomentaryDur_Ms = config_doc["garageMomentaryDur_Ms"] | 500;
   config.addKeyTimeoutDur_S = config_doc["addKeyTimeoutDur_S"] | 10;
+  config.buzzer_pin = returnGHpin(config_doc["buzzer_gh"].as<int>(), def_buzzer_pin);
+  config.neopix_pin = returnGHpin(config_doc["neopix_gh"].as<int>(), def_neopix_pin);
+  config.lockRelay_pin = returnGHpin(config_doc["lockRelay_gh"].as<int>(), def_lockRelay_pin);
+  config.AUXButton_pin = returnGHpin(config_doc["AUXButton_gh"].as<int>(), def_AUXButton_pin);
+  config.exitButton_pin = returnGHpin(config_doc["exitButton_gh"].as<int>(), def_exitButton_pin);
+  config.bellButton_pin = returnGHpin(config_doc["bellButton_gh"].as<int>(), def_bellButton_pin);
+  config.magSensor_pin = returnGHpin(config_doc["magSensor_gh"].as<int>(), def_magSensor_pin);
+  config.wiegand_0_pin = returnGHpin(config_doc["wiegand_0_gh"].as<int>(), def_wiegand_0_pin);
+  config.wiegand_1_pin = returnGHpin(config_doc["wiegand_1_gh"].as<int>(), def_wiegand_1_pin);
   config_file.close();
   return true;
 }
@@ -1193,6 +1239,7 @@ int connectWifi() {
       Serial.print("Unable to connect to SSID ");
       Serial.println(config.wifi_ssid);
       WiFi.disconnect();
+      disconCount++;
       return 1;
     }
   }
@@ -1218,23 +1265,23 @@ void unlock(int secs) {
       mqttPublish(config.mqtt_stat_topic, "Toggle garage door");
     }
     setPixGreen();
-    digitalWrite(lockRelay_pin, HIGH);
+    digitalWrite(config.lockRelay_pin, HIGH);
     playUnlockTone();
     delay(config.garageMomentaryDur_Ms);
-    digitalWrite(lockRelay_pin, LOW);
+    digitalWrite(config.lockRelay_pin, LOW);
     setPixBlue();
   return;
   }
   if (failSecure) {
-    digitalWrite(lockRelay_pin, HIGH);
+    digitalWrite(config.lockRelay_pin, HIGH);
   } else {
-    digitalWrite(lockRelay_pin, LOW);
+    digitalWrite(config.lockRelay_pin, LOW);
   }
+  setPixGreen();
   playUnlockTone();
   Serial.print("Unlock - ");
   Serial.print(secs);
   Serial.println(" Seconds");
-  setPixGreen();
   if (mqttConnected()) {
     mqttPublish(config.mqtt_stat_topic, "unlocked");
   }
@@ -1245,9 +1292,9 @@ void unlock(int secs) {
   Serial.println("Lock");
   setPixBlue();
     if (failSecure) {
-    digitalWrite(lockRelay_pin, LOW);
+    digitalWrite(config.lockRelay_pin, LOW);
   } else {
-    digitalWrite(lockRelay_pin, HIGH);
+    digitalWrite(config.lockRelay_pin, HIGH);
   }
   if (mqttConnected()) {
     mqttPublish(config.mqtt_stat_topic, "locked");
@@ -1261,10 +1308,10 @@ void garage_toggle() {
       mqttPublish(config.mqtt_stat_topic, "Toggle garage door");
     }
     setPixGreen();
-    digitalWrite(lockRelay_pin, HIGH);
+    digitalWrite(config.lockRelay_pin, HIGH);
     playUnlockTone();
     delay(config.garageMomentaryDur_Ms);
-    digitalWrite(lockRelay_pin, LOW);
+    digitalWrite(config.lockRelay_pin, LOW);
     setPixBlue();
   } else if (garage_mode == false) {
     Serial.println("Unit is not in garage mode.");
@@ -1282,10 +1329,10 @@ void garage_open() {
       mqttPublish(config.mqtt_stat_topic, "Opening garage door");
     }
     setPixGreen();
-    digitalWrite(lockRelay_pin, HIGH);
+    digitalWrite(config.lockRelay_pin, HIGH);
     playUnlockTone();
     delay(config.garageMomentaryDur_Ms);
-    digitalWrite(lockRelay_pin, LOW);
+    digitalWrite(config.lockRelay_pin, LOW);
     setPixBlue();
   } else if  (garage_mode && (doorOpen)) {
     Serial.println("Door is already open!");
@@ -1308,10 +1355,10 @@ void garage_close() {
       mqttPublish(config.mqtt_stat_topic, "Closing garage door");
     }
     setPixGreen();
-    digitalWrite(lockRelay_pin, HIGH);
+    digitalWrite(config.lockRelay_pin, HIGH);
     playUnlockTone();
     delay(config.garageMomentaryDur_Ms);
-    digitalWrite(lockRelay_pin, LOW);
+    digitalWrite(config.lockRelay_pin, LOW);
     setPixBlue();
   } else if  (garage_mode && (doorOpen == false)) {
     Serial.println("Door is already closed!");
@@ -1331,8 +1378,8 @@ void garage_close() {
 
 int checkExit() {
   long count = 0;
-  if (digitalRead(exitButton_pin) == LOW) {
-    while (digitalRead(exitButton_pin) == LOW) {
+  if (digitalRead(config.exitButton_pin) == LOW) {
+    while (digitalRead(config.exitButton_pin) == LOW) {
       count = count + 10;
       delay(10);
       if (count > 3000) {
@@ -1390,14 +1437,14 @@ int check0() {
 }
 
 void checkAUX() {
-  if (digitalRead(AUXButton_pin) == LOW) {
+  if (digitalRead(config.AUXButton_pin) == LOW) {
     playBipTone();
     long count = 0;
     Serial.println("AUX Button Pressed");
     if (mqttConnected()) {
       mqttPublish(config.mqtt_stat_topic, "AUX button pressed");
     }
-    while (digitalRead(AUXButton_pin) == LOW && (count < 500)) {
+    while (digitalRead(config.AUXButton_pin) == LOW && (count < 500)) {
       count++;
       delay(10);
     }
@@ -1411,7 +1458,7 @@ void checkAUX() {
       Serial.println("Release button now to upload files (SD->FFAT)");
       playUploadTone();
     }
-    while ((digitalRead(AUXButton_pin) == LOW) && (count < 1000)) {
+    while ((digitalRead(config.AUXButton_pin) == LOW) && (count < 1000)) {
       count++;
       delay(10);
     }
@@ -1420,7 +1467,7 @@ void checkAUX() {
       Serial.println("Release button now to wipe authorized keys list.");
       playPurgeTone();
     }
-    while (digitalRead(AUXButton_pin) == LOW && (count < 1500)) {
+    while (digitalRead(config.AUXButton_pin) == LOW && (count < 1500)) {
       count++;
       delay(10);
     }
@@ -1429,7 +1476,7 @@ void checkAUX() {
       Serial.println("Release button now to perform factory reset.");
       playFactoryTone();
     }
-    while (digitalRead(AUXButton_pin) == LOW) {
+    while (digitalRead(config.AUXButton_pin) == LOW) {
       delay(10);
     }
     if ((count > 499)&&(count < 1000)) {
@@ -1467,19 +1514,20 @@ void checkAUX() {
 }
 
 void checkBell() {
-  if (digitalRead(bellButton_pin) == LOW) {
+  if (digitalRead(config.bellButton_pin) == LOW) {
     Serial.println("");
     Serial.print("Bell Pressed - ");
-    if (mqttConnected()) {
-      mqttPublish(config.mqtt_stat_topic, "bell pressed");
-    }
+    mqttPublish(config.mqtt_stat_topic, "bell pressed");
     ringBell();
+    while (digitalRead(config.bellButton_pin) == LOW) {
+      delay(10);
+    }
   }
 }
 
 //Check magnetic sensor for open/closed door state (Optional)
 void checkMagSensor() {
-  if (doorOpen == true && digitalRead(magSensor_pin) == LOW && config.magsr_present) {
+  if (doorOpen == true && digitalRead(config.magSensor_pin) == LOW && config.magsr_present) {
     //send not that door has closed
     doorOpen = false;
     Serial.println("Door Closed");
@@ -1488,7 +1536,7 @@ void checkMagSensor() {
     }
     //Serial.print("doorOpen == ");
     //Serial.println(doorOpen);
-  } else if (doorOpen == false && digitalRead(magSensor_pin) == HIGH && config.magsr_present) {
+  } else if (doorOpen == false && digitalRead(config.magSensor_pin) == HIGH && config.magsr_present) {
     doorOpen = true;
     Serial.println("Door Opened");
     if (mqttClient.connected()) {
@@ -1558,10 +1606,10 @@ note_t parseNote(const String& noteStr) {
 }
 
 boolean checkStopBell() {
-  return digitalRead(exitButton_pin) == LOW || 
+  return digitalRead(config.exitButton_pin) == LOW || 
          digitalRead(IO0) == LOW || 
-         digitalRead(AUXButton_pin) == LOW || 
-         digitalRead(bellButton_pin) == LOW;
+         digitalRead(config.AUXButton_pin) == LOW || 
+         digitalRead(config.bellButton_pin) == LOW;
 }
 
 // Sorting helper
@@ -1653,25 +1701,25 @@ void playNote(note_t note, int octave, int dur) {
   // Serial.print(octave);
   // Serial.print(" for duration ");
   // Serial.println(dur);
-  ledcWriteNote(buzzer_pin, note, octave);
+  ledcWriteNote(config.buzzer_pin, note, octave);
   delay(dur*100);
-  ledcWriteTone(buzzer_pin, 0);
+  ledcWriteTone(config.buzzer_pin, 0);
 }
 
 void playBipTone() {
   if (digitalRead(DS03) == HIGH) {
-    ledcWriteTone(buzzer_pin, 100);
+    ledcWriteTone(config.buzzer_pin, 100);
     delay(100);
-    ledcWriteTone(buzzer_pin, 0);
+    ledcWriteTone(config.buzzer_pin, 0);
   }
 }
 
 void playUnlockTone() {
   if (digitalRead(DS03) == HIGH) {
     for (int i=0; i <= 1; i++) {
-      ledcWriteTone(buzzer_pin, 5000);
+      ledcWriteTone(config.buzzer_pin, 5000);
       delay(50);
-      ledcWriteTone(buzzer_pin, 0);
+      ledcWriteTone(config.buzzer_pin, 0);
       delay(100);
     }
   }
@@ -1679,36 +1727,36 @@ void playUnlockTone() {
 
 void playUnauthorizedTone() {
   if (digitalRead(DS03) == HIGH) {
-    ledcWriteTone(buzzer_pin, 700);
+    ledcWriteTone(config.buzzer_pin, 700);
     delay(200);
-    ledcWriteTone(buzzer_pin, 400);
+    ledcWriteTone(config.buzzer_pin, 400);
     delay(600);
-    ledcWriteTone(buzzer_pin, 0);
+    ledcWriteTone(config.buzzer_pin, 0);
   }
 }
 
 void playPurgeTone() {
   if (digitalRead(DS03) == HIGH) {
-    ledcWriteTone(buzzer_pin, 500);
+    ledcWriteTone(config.buzzer_pin, 500);
     delay(1000);
-    ledcWriteTone(buzzer_pin, 0);
+    ledcWriteTone(config.buzzer_pin, 0);
   }
 }
 
 void playFactoryTone() {
   if (digitalRead(DS03) == HIGH) {
-    ledcWriteTone(buzzer_pin, 7000);
+    ledcWriteTone(config.buzzer_pin, 7000);
     delay(1000);
-    ledcWriteTone(buzzer_pin, 0);
+    ledcWriteTone(config.buzzer_pin, 0);
   }
 }
 
 void playAddModeTone() {
   if (digitalRead(DS03) == HIGH) {
     for (int i=0; i<=2; i++) {
-      ledcWriteTone(buzzer_pin, 6500);
+      ledcWriteTone(config.buzzer_pin, 6500);
       delay(80);
-      ledcWriteTone(buzzer_pin, 0);
+      ledcWriteTone(config.buzzer_pin, 0);
       delay(80);
     }
   }
@@ -1717,9 +1765,9 @@ void playAddModeTone() {
 void playUploadTone() {
   if (digitalRead(DS03) == HIGH) {
     for (int i=0; i<=4; i++) {
-      ledcWriteTone(buzzer_pin, 6500);
+      ledcWriteTone(config.buzzer_pin, 6500);
       delay(80);
-      ledcWriteTone(buzzer_pin, 0);
+      ledcWriteTone(config.buzzer_pin, 0);
       delay(80);
     }
   }
@@ -1727,29 +1775,29 @@ void playUploadTone() {
 
 void playTwinkleUpTone() {
   if (digitalRead(DS03) == HIGH) {
-    ledcWriteTone(buzzer_pin, 2000);
+    ledcWriteTone(config.buzzer_pin, 2000);
     delay(80);
-    ledcWriteTone(buzzer_pin, 4000);
+    ledcWriteTone(config.buzzer_pin, 4000);
     delay(80);
-    ledcWriteTone(buzzer_pin, 6000);
+    ledcWriteTone(config.buzzer_pin, 6000);
     delay(80);
-    ledcWriteTone(buzzer_pin, 8000);
+    ledcWriteTone(config.buzzer_pin, 8000);
     delay(80);
-    ledcWriteTone(buzzer_pin, 0);
+    ledcWriteTone(config.buzzer_pin, 0);
   }
 }
 
 void playTwinkleDownTone() {
   if (digitalRead(DS03) == HIGH) {
-    ledcWriteTone(buzzer_pin, 8000);
+    ledcWriteTone(config.buzzer_pin, 8000);
     delay(80);
-    ledcWriteTone(buzzer_pin, 6000);
+    ledcWriteTone(config.buzzer_pin, 6000);
     delay(80);
-    ledcWriteTone(buzzer_pin, 4000);
+    ledcWriteTone(config.buzzer_pin, 4000);
     delay(80);
-    ledcWriteTone(buzzer_pin, 2000);
+    ledcWriteTone(config.buzzer_pin, 2000);
     delay(80);
-    ledcWriteTone(buzzer_pin, 0);
+    ledcWriteTone(config.buzzer_pin, 0);
   }
 }
 
@@ -1796,12 +1844,12 @@ void ringBell() {
 void playGeigerTone() {
   delay(10); 
   if (digitalRead(DS03) == HIGH) {
-    ledcWrite(buzzer_pin, 0);
+    ledcWrite(config.buzzer_pin, 0);
     for (int i=1; i<20; i++) {
-      ledcWriteTone(buzzer_pin, i * 100);
+      ledcWriteTone(config.buzzer_pin, i * 100);
       delay(13);    
     }
-    ledcWrite(buzzer_pin, 0);
+    ledcWrite(config.buzzer_pin, 0);
   }
 }
 
@@ -1810,16 +1858,16 @@ void playRandomTone() {
     Serial.println("Ringing bell");
     for (int i=0; i<=3; i++) {
       for (int i=0; i<=25; i++) {
-        ledcWriteTone(buzzer_pin, random(500, 10000));
+        ledcWriteTone(config.buzzer_pin, random(500, 10000));
         delay(100);
-        if (digitalRead(exitButton_pin) == LOW) {
+        if (digitalRead(config.exitButton_pin) == LOW) {
           return;
         }
       }
-      ledcWriteTone(buzzer_pin, 0);
+      ledcWriteTone(config.buzzer_pin, 0);
       delay(1000);
     }
-    ledcWriteTone(buzzer_pin, 0);
+    ledcWriteTone(config.buzzer_pin, 0);
   }
 }
 
@@ -2622,7 +2670,6 @@ void addressingStaticSDtoFFatHTTP() {
 }
 
 void githubOtaHTTP() {
-  Serial.println("Performing OTA update from GitHub");
   webServer.send(200, "text/plain", "OTA started");
   delay(100);  // Allow time for response to flush before rebooting
   if (handleGithubOTA()) {
@@ -3130,28 +3177,10 @@ void setup() {
   Serial.println("OK");
   fatfs_setup();
   checkSDPresent(1);
-  Serial.print("Configuring GPIO...");
-  Serial.flush();
-  pinMode(buzzer_pin, OUTPUT);
-  pinMode(lockRelay_pin, OUTPUT);
-  pinMode(exitButton_pin, INPUT_PULLUP);
-  pinMode(wiegand_0_pin, INPUT);
-  pinMode(wiegand_1_pin, INPUT);
-  pinMode(AUXButton_pin, INPUT_PULLUP);
-  pinMode(bellButton_pin, INPUT_PULLUP);
-  pinMode(magSensor_pin, INPUT_PULLUP);
-  pinMode(SD_CS_PIN, OUTPUT);
-  pinMode(SD_CD_PIN, INPUT_PULLUP);
-  pinMode(DS01, INPUT_PULLUP);
-  pinMode(DS02, INPUT_PULLUP);
-  pinMode(DS03, INPUT_PULLUP);
-  pinMode(DS04, INPUT_PULLUP);
-  pinMode(IO0, INPUT_PULLUP);
-  digitalWrite(buzzer_pin, LOW);
-  Serial.println("OK");
-
   // Should load default config if run for the first time
   Serial.print("Loading configuration...");
+  pinMode(SD_CS_PIN, OUTPUT);
+  pinMode(SD_CD_PIN, INPUT_PULLUP);
   loadFSJSON_config(config_filename, config);
   if (config.mqtt_tls && config.mqtt_auth == false) {
     if (!loadTLSClient()) {
@@ -3165,6 +3194,24 @@ void setup() {
       Serial.println("Could not load CA cert from FFat.");
     }
   }
+  delay(500);
+  Serial.print("Configuring GPIO...");
+  pinMode(config.buzzer_pin, OUTPUT);
+  pinMode(config.lockRelay_pin, OUTPUT);
+  pinMode(config.exitButton_pin, INPUT_PULLUP);
+  pinMode(config.wiegand_0_pin, INPUT);
+  pinMode(config.wiegand_1_pin, INPUT);
+  pinMode(config.AUXButton_pin, INPUT_PULLUP);
+  pinMode(config.bellButton_pin, INPUT_PULLUP);
+  pinMode(config.magSensor_pin, INPUT_PULLUP);
+  pinMode(DS01, INPUT_PULLUP);
+  pinMode(DS02, INPUT_PULLUP);
+  pinMode(DS03, INPUT_PULLUP);
+  pinMode(DS04, INPUT_PULLUP);
+  pinMode(IO0, INPUT_PULLUP);
+  digitalWrite(config.buzzer_pin, LOW);
+  Serial.println("OK");
+  pixel = Adafruit_NeoPixel(NUMPIXELS, config.neopix_pin, NEO_GRB + NEO_KHZ800);
   Serial.print("Loading bell file...");
   loadBellFile();
   Serial.print("Loading addressing...");
@@ -3202,9 +3249,9 @@ void setup() {
   }
 
   if (failSecure) {
-    digitalWrite(lockRelay_pin, LOW);
+    digitalWrite(config.lockRelay_pin, LOW);
   } else {
-    digitalWrite(lockRelay_pin, HIGH);
+    digitalWrite(config.lockRelay_pin, HIGH);
   }
   if (forceOffline == false) {
     connectWifi();
@@ -3255,10 +3302,10 @@ void setup() {
   wiegand.onReceive(receivedData, "Key read: ");
   wiegand.onReceiveError(receivedDataError, "Key read error: ");
   wiegand.begin(Wiegand::LENGTH_ANY, true);
-  attachInterrupt(digitalPinToInterrupt(wiegand_0_pin), pinStateChanged, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(wiegand_1_pin), pinStateChanged, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(config.wiegand_0_pin), pinStateChanged, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(config.wiegand_1_pin), pinStateChanged, CHANGE);
   pinStateChanged();
-  ledcAttachChannel(buzzer_pin, freq, resolution, channel);
+  ledcAttachChannel(config.buzzer_pin, freq, resolution, channel);
   setPixBlue();
   Serial.println("Ready.");
   Serial.println("");
@@ -3299,7 +3346,6 @@ void loop() {
     }
     checkMqtt();
   }
-  
   // Offline Functions
   checkKey();
   checkMagSensor();
