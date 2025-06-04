@@ -74,9 +74,20 @@ See descriptions of supported configuration parameters below:
 <tr><td width="140">keyWaitDur_Ms</td><td width="150">(bool, 1500)</td><td width="660">Timeout in miliseconds between keypad digits eg: max time between button presses for keypad input</td></tr>
 <tr><td width="140">garageMomentaryDur_Ms</td><td width="150">(bool, 500)</td><td width="660">Time in miliseconds that the momentary signal will be on when in garage mode</td></tr>
 <tr><td width="140">addKeyTimeoutDur_S</td><td width="150">(bool, 10)</td><td width="660">Time in seconds that the unit will await a new card when in Key Add Mode before timing out</td></tr>
+<tr><td width="140">buzzer_gh</td><td width="150">(int)</td><td width="660">GPIO Header pin to reassign the buzzer output to.</td></tr>
+<tr><td width="140">neopix_gh</td><td width="150">(int)</td><td width="660">GPIO Header pin to reassign neopixel output to. (Requires external LLC)</td></tr>
+<tr><td width="140">lockRelay_gh</td><td width="150">(int)</td><td width="660">GPIO Header pin to reassign lock relay output to.</td></tr>
+<tr><td width="140">AUXButton_gh</td><td width="150">(int)</td><td width="660">GPIO Header pin to reassign AUX button input to.</td></tr>
+<tr><td width="140">exitButton_gh</td><td width="150">(int)</td><td width="660">GPIO Header pin to reassign exit button input to.</td></tr>
+<tr><td width="140">bellButton_gh</td><td width="150">(int)</td><td width="660">GPIO Header pin to reassign bell button input to.</td></tr>
+<tr><td width="140">magSensor_gh</td><td width="150">(int)</td><td width="660">GPIO Header pin to reassign magnetic door sensor input to.</td></tr>
+<tr><td width="140">wiegand_0_gh</td><td width="150">(int)</td><td width="660">GPIO Header pin to reassign wiegand 0 input to. (Requires external LLC)</td></tr>
+<tr><td width="140">wiegand_1_gh</td><td width="150">(int)</td><td width="660">GPIO Header pin to reassign wiegand 1 input to. (Requires external LLC)</td></tr>
 </table>
 
 ### Flashing configuration to the unit
+- Use a FAT32-formatted SD card that is 32gb or smaller
+- Copy your dl32.json configuration file to the SD card (filename is case senstitive)
 - Insert the SD card into the slot
 - Power the unit on, then hold the button labeled AUX for 5 seconds until you hear 5 short beeps and the blue LED turns purple.
 - Release the AUX button.
