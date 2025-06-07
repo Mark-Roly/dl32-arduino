@@ -83,6 +83,7 @@ See descriptions of supported configuration parameters below:
 <tr><td width="140">magSensor_gh</td><td width="150">(int)</td><td width="660">GPIO Header pin to reassign magnetic door sensor input to.</td></tr>
 <tr><td width="140">wiegand_0_gh</td><td width="150">(int)</td><td width="660">GPIO Header pin to reassign wiegand 0 input to. (Requires external LLC)</td></tr>
 <tr><td width="140">wiegand_1_gh</td><td width="150">(int)</td><td width="660">GPIO Header pin to reassign wiegand 1 input to. (Requires external LLC)</td></tr>
+<tr><td width="140">pixelBrightness</td><td width="150">(int, 1)</td><td width="660">Brightness level of RGB Neopixel. 0-10. 0 is off  and 10 is brightest.</td></tr>
 </table>
 
 ### Flashing configuration to the unit
