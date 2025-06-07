@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 04/06/2025
+  Last updated 07/06/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250604
+#define codeVersion 20250607
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -125,6 +125,7 @@ struct Config {
   int magSensor_pin;
   int wiegand_0_pin;
   int wiegand_1_pin;
+  int pixelBrightness;
 };
 
 // Variables for FreeRTOS non-blocking bell task
@@ -917,6 +918,7 @@ bool loadFSJSON_config(const char* config_filename, Config& config) {
   config.magSensor_pin = returnGHpin(config_doc["magSensor_gh"].as<int>(), def_magSensor_pin);
   config.wiegand_0_pin = returnGHpin(config_doc["wiegand_0_gh"].as<int>(), def_wiegand_0_pin);
   config.wiegand_1_pin = returnGHpin(config_doc["wiegand_1_gh"].as<int>(), def_wiegand_1_pin);
+  config.pixelBrightness = returnPixelBrightness(config_doc["pixelBrightness"] | 1);
   config_file.close();
   return true;
 }
@@ -1171,28 +1173,37 @@ String urlDecode(const String& input) {
 
 // NOTE: Onboard pixel uses G,R,B
 
+int returnPixelBrightness(int brightness) {
+  if ((brightness >= 0) && (brightness <= 10)) {
+    return brightness;
+  } else {
+    return 1;
+  }
+}
+
 void setPixRed() {
-  pixel.setPixelColor(0, pixel.Color(0,25,0));
+  pixel.setPixelColor(0, pixel.Color(0,(25*config.pixelBrightness),0));
   pixel.show();
 }
 
 void setPixAmber() {
-  pixel.setPixelColor(0, pixel.Color(10,25,0));
+  pixel.setPixelColor(0, pixel.Color((10*config.pixelBrightness),(25*config.pixelBrightness),0));
   pixel.show();
 }
 
 void setPixGreen() {
-  pixel.setPixelColor(0, pixel.Color(25,0,0));
+  pixel.setPixelColor(0, pixel.Color((25*config.pixelBrightness),0,0));
   pixel.show();
 }
 
 void setPixPurple() {
-  pixel.setPixelColor(0, pixel.Color(0,10,25));
+  pixel.setPixelColor(0, pixel.Color(0,(10*config.pixelBrightness),(25*config.pixelBrightness)));
   pixel.show();
 }
 
 void setPixBlue() {
-  pixel.setPixelColor(0, pixel.Color(0,0,25));
+  int b_val = 25*config.pixelBrightness;
+  pixel.setPixelColor(0, pixel.Color(0,0,(25*config.pixelBrightness)));
   pixel.show();
 }
 
@@ -3212,6 +3223,7 @@ void setup() {
   digitalWrite(config.buzzer_pin, LOW);
   Serial.println("OK");
   pixel = Adafruit_NeoPixel(NUMPIXELS, config.neopix_pin, NEO_GRB + NEO_KHZ800);
+  pixel.begin();
   Serial.print("Loading bell file...");
   loadBellFile();
   Serial.print("Loading addressing...");
@@ -3296,8 +3308,6 @@ void setup() {
   } else {
     Serial.println("Running in offline mode.");
   }
-  delay(300);
-  pixel.begin();
   // instantiate listeners and initialize Wiegand reader, configure pins
   wiegand.onReceive(receivedData, "Key read: ");
   wiegand.onReceiveError(receivedDataError, "Key read error: ");
