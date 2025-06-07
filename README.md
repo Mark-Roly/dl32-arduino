@@ -4,9 +4,9 @@
     The ESP32 powered smart door lock controller
     <br />
   </p>
-<p>**NOTE:** The current version of Adafruit_Neopixel.h is causing multiple models of ESP32 C3, C6, and *S3* (On which the DL32-S3 is based) to throw RMT errors and crash.
+<p>**NOTE:** The current version of Adafruit_Neopixel.h is causing multiple models of ESP32 C3, C6, and *S3* (On which the DL32-S3 is based) to throw RMT errors and crash when used with ESP32 core 3.2.0.
 The bug is being tracked at <a href="https://github.com/adafruit/Adafruit_NeoPixel/issues/432">here</a><br/>
-1.12.4-current are affected. In the interim, please use version 1.12.3<br/></p>
+1.12.4-current are affected. In the interim, please use Neopixel 1.12.3 and ESP32 3.1.3<br/></p>
 
 <!-- ABOUT THE PROJECT -->
 ## About The Project
