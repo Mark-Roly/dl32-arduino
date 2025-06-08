@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 07/06/2025
+  Last updated 08/06/2025
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250607
+#define codeVersion 20250608
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -851,10 +851,9 @@ bool copyFileFFat(const char* sourcePath, const char* destinationPath) {
   while ((bytesRead = sourceFile.read(buffer, bufferSize)) > 0) {
     destFile.write(buffer, bytesRead);
   }
-
+  
   sourceFile.close();
   destFile.close();
-
   // Serial.print("Copied ");
   // Serial.print(sourcePath);
   // Serial.print(" to ");
@@ -2452,9 +2451,12 @@ void updateControls() {
 
 // Display file management pane
 void displayFiles() {
-  pageContent += "      <div id='previewModal' class='previewModal' style='display:none; position:fixed; border:2px solid #000; z-index:1000; overflow:auto;'>\n";
-  pageContent += "        <pre id='previewContent' class='previewContent' style='max-height:400px; overflow:auto; text-align:left;'></pre>\n";
-  pageContent += "        <button onclick='closePreview()' style='width:100%; height:40px; background-color:#ff3200; color:black; border:none; font-size:16px;'>Close</button>\n";
+  pageContent += "      <div id='previewModal' class='previewModal' style='display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:600px; height:auto; background:white; border:2px solid black; padding:10px; z-index:1000;'>\n";
+  pageContent += "        <textarea id='previewContent' class='previewContent' style='width:100%; height:500px; font-family:monospace; font-size:12px; resize:vertical; box-sizing:border-box;'></textarea>\n";
+  pageContent += "        <div style='margin-top:8px; display:flex; justify-content:space-between; gap:10px;'>\n";
+  pageContent += "          <button onclick='savePreviewFile()' style='flex:1; height:32px; background-color:#00cc00; color:white; border:none;'>Save</button>\n";
+  pageContent += "          <button onclick='closePreview()' style='flex:1; height:32px; background-color:#ff3200; color:white; border:none;'>Close</button>\n";
+  pageContent += "        </div>\n";
   pageContent += "      </div>\n";
   pageContent += "      <script>\n";
   pageContent += "        function closePreview() {\n";
@@ -2463,12 +2465,25 @@ void displayFiles() {
   pageContent += "        async function previewFile(encodedName) {\n";
   pageContent += "          const res = await fetch('/previewFile/' + encodeURIComponent(encodedName));\n";
   pageContent += "          const text = await res.text();\n";
-  pageContent += "          document.getElementById('previewContent').innerText = text;\n";
+  pageContent += "          document.getElementById('previewContent').value = text;\n";
   pageContent += "          document.getElementById('previewModal').style.display = 'block';\n";
+  pageContent += "          window.currentPreviewFile = encodedName;\n";
   pageContent += "        }\n";
   pageContent += "        function showMessage(message) {\n";
   pageContent += "          document.getElementById('previewContent').innerText = message;\n";
   pageContent += "          document.getElementById('previewModal').style.display = 'block';\n";
+  pageContent += "        }\n";
+  pageContent += "        async function savePreviewFile() {\n";
+  pageContent += "          const filename = window.currentPreviewFile;\n";
+  pageContent += "          const content = document.getElementById('previewContent').value;\n";
+  pageContent += "          const response = await fetch('/saveFile/' + encodeURIComponent(filename), {\n";
+  pageContent += "            method: 'POST',\n";
+  pageContent += "            headers: {'Content-Type': 'text/plain'},\n";
+  pageContent += "            body: content\n";
+  pageContent += "          });\n";
+  pageContent += "          const result = await response.text();\n";
+  pageContent += "          alert(result);\n";
+  pageContent += "          location.reload();\n";
   pageContent += "        }\n";
   pageContent += "      </script>\n";
   pageContent += "      <a class='header'>File Management</a>\n";
@@ -2515,7 +2530,11 @@ void displayFiles() {
   pageContent += "          <input type='submit' class='fileMgInputButton' value='UPLOAD'>\n";
   pageContent += "        </div>\n";
   pageContent += "      </form>\n";
-  pageContent += "      <br/>";
+  pageContent += "      <form method='GET' action='/createFileForm' style='margin-top:3px;'>\n";
+  pageContent += "        <input type='text' name='filename' placeholder='Enter new file name' class='addKeyInput' required>\n";
+  pageContent += "        <input type='submit' value='CREATE' class='addKeyButton'>\n";
+  pageContent += "      </form>\n";
+  pageContent += "      <br/>\n";
 }
 
 // Output config to serial
@@ -2735,6 +2754,7 @@ const char* html_head = R"rawliteral(
       .previewModal {display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:400px; background:white; border:2px solid black; padding:10px; z-index:1000;}
       .previewModal button {margin-top: 5px; margin-right: 10px;}
       .previewContent {max-height: 400px; overflow: auto; text-align: left;}
+      textarea.previewContent {padding: 5px; font-family: monospace; font-size: 12px; border: 1px solid #ccc;}
       .keyTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; margin-top: 3px; border: 1px solid #ff3200; border-collapse: collapse;}
       .keyCell {height: 15px; color: #ff3200;}
       .keyDelCell {height: 15px; width: 45px; background-color: #ff3200; color: black;}
@@ -2975,6 +2995,22 @@ void startWebServer() {
   webServer.on(UriRegex("/previewFile/([\\w\\.\\-]{1,32})"), HTTP_GET, [&]() {
     previewFile(webServer.pathArg(0));
   });
+  webServer.on(UriRegex("/saveFile/(.+)"), HTTP_POST, []() {
+  String encoded = webServer.pathArg(0);
+  String filename = "/" + urlDecode(encoded);
+  if (!FFat_present || !FFat.exists(filename)) {
+    webServer.send(404, "text/plain", "File not found");
+    return;
+  }
+  File f = FFat.open(filename, "w");
+  if (!f) {
+    webServer.send(500, "text/plain", "Failed to open file");
+    return;
+  }
+  f.print(webServer.arg(0));
+  f.close();
+  webServer.send(200, "text/plain", "File saved");
+  });
   webServer.on(UriRegex("/downloadFile/([0-9a-zA-Z.\\-_]{3,32})"), HTTP_GET, []() {
     String filename = "/" + webServer.pathArg(0);
     if (FFat.exists(filename)) {
@@ -3007,6 +3043,25 @@ void startWebServer() {
     redirectHome();
     playTwinkleUpTone();
   }, handleFileUpload);
+  webServer.on("/createFileForm", HTTP_GET, []() {
+  if (!webServer.hasArg("filename")) {
+    webServer.send(400, "text/plain", "Missing filename");
+    return;
+  }
+  String name = "/" + urlDecode(webServer.arg("filename"));
+  if (FFat.exists(name)) {
+    webServer.send(200, "text/plain", "File already exists");
+    return;
+  }
+  File f = FFat.open(name, FILE_WRITE);
+  if (!f) {
+    webServer.send(500, "text/plain", "Failed to create file");
+    return;
+  }
+  f.close();
+  playTwinkleUpTone();
+  redirectHome();
+  });
   webServer.on("/", MainPage);
   webServer.on(UriRegex("/addFormKey/.{0,20}"), HTTP_GET, [&]() {
     Serial.print("Writing key ");
