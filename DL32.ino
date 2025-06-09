@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 08/06/2025
+  Last updated 2025-06-09
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250608
+#define codeVersion 20250609
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -619,7 +619,7 @@ void pinStateChanged() {
 }
 
 // Notifies when a reader has been connected or disconnected.
-// Instead of a message, the seconds parameter can be anything you want -- Whatever you specify on `wiegand.onStateChange()`
+// Instead of a message, the seconds parameter can be anything you want -- Whatever you specify on wiegand.onStateChange()
 void stateChanged(bool plugged, const char* message) {
   Serial.print(message);
   Serial.println(plugged ? "CONNECTED" : "DISCONNECTED");
@@ -1384,6 +1384,19 @@ void garage_close() {
   return;
 }
 
+void factoryReset() {
+  Serial.println("Factory resetting device... ");
+  mqttPublish(config.mqtt_stat_topic, "Factory resetting device...");
+  deleteFile(FFat, keys_filename);
+  deleteFile(FFat, config_filename);
+  deleteFile(FFat, addressing_filename);
+  FFat.format();
+  playTwinkleDownTone();
+  Serial.println("Factory reset complete.");
+  mqttPublish(config.mqtt_stat_topic, "Factory reset complete.");
+  restart();
+}
+
 // --- Button Functions --- Button Functions --- Button Functions --- Button Functions --- Button Functions --- Button Functions ---
 
 int checkExit() {
@@ -1507,16 +1520,7 @@ void checkAUX() {
       mqttPublish(config.mqtt_stat_topic, "Done");
       delay(1000);
     } else if (count > 1499) {
-      Serial.println("Factory resetting device... ");
-      mqttPublish(config.mqtt_stat_topic, "Factory resetting device...");
-      deleteFile(FFat, keys_filename);
-      deleteFile(FFat, config_filename);
-      deleteFile(FFat, addressing_filename);
-      FFat.format();
-      playTwinkleDownTone();
-      Serial.println("Factory reset complete.");
-      mqttPublish(config.mqtt_stat_topic, "Factory reset complete.");
-      restart();
+      factoryReset();
     }
     setPixBlue();
     return;
@@ -2340,7 +2344,7 @@ void displayKeys() {
   pageContent += "      </table>\n";
   keyFile.close();
   pageContent += "      <form action='/addFormKey/' method='get'>\n";
-  pageContent += "        <input type='text' id='key' name='key' class='addKeyInput'></input>\n";
+  pageContent += "        <input type='text' id='key' name='key' placeholder='Enter new key' class='addKeyInput'></input>\n";
   pageContent += "        <input type='submit' value='ADD' class='addKeyButton' required>\n";
   pageContent += "      </form>\n";
   pageContent += "      <br/>\n";
@@ -2432,6 +2436,79 @@ const char* updateScript = R"rawliteral(
       </script>
 )rawliteral";
 
+const char* restartScript = R"rawliteral(
+      <script>
+        function confirmAndRestartDL32() {
+          if (!confirm("Restart DL32?\n\nContinue?")) return;
+          fetch('/restartESPHTTP')
+            .then(response => {
+              if (response.ok) {
+                alert("Restart initiated.\nDL32 will reboot shortly.");
+              } else {
+                alert("Restart request failed. Please try again.");
+              }
+            })
+            .catch(error => {
+              alert("Error sending restart request: " + error.message);
+            });
+        }
+      </script>
+)rawliteral";
+
+const char* purgeConfigScript = R"rawliteral(
+      <script>
+        function confirmAndPurgeConfig() {
+          if (!confirm("Are you sure you want to purge the configuration?\n\nThis will delete the current DL32 settings (Current settings will persist until next restart).\n\nContinue?")) return;
+          fetch('/purgeConfigHTTP')
+            .then(response => {
+              if (response.ok) {
+                alert("Configuration purged.");
+              } else {
+                alert("Failed to purge configuration.");
+              }
+            })
+            .catch(error => {
+              alert("Error sending purge request: " + error.message);
+            });
+        }
+      </script>
+)rawliteral";
+
+const char* purgeKeysScript = R"rawliteral(
+      <script>
+        function confirmAndPurgeKeys() {
+          if (!confirm("Purge Stored Keys?\n\nThis will delete all authorized key entries.\n\nContinue?")) return;
+          fetch('/purgeKeysHTTP')
+            .then(res => {
+              if (res.ok) {
+                alert("Stored keys purged.");
+                location.reload();
+              } else {
+                alert("Failed to purge stored keys.");
+              }
+            })
+            .catch(err => alert("Error: " + err.message));
+        }
+      </script>
+)rawliteral";
+
+const char* factoryResetScript = R"rawliteral(
+      <script>
+        function confirmAndFactoryReset() {
+          if (!confirm("Full Factory Reset?\n\nAll files, keys, and configuration will be erased.\n\nThis action is irreversible!\n\nProceed?")) return;
+          fetch('/factoryResetHTTP')
+            .then(res => {
+              if (res.ok) {
+                alert("Factory reset initiated. DL32 will reboot.");
+              } else {
+                alert("Factory reset failed.");
+              }
+            })
+            .catch(err => alert("Error: " + err.message));
+        }
+      </script>
+)rawliteral";
+
 const char* updateForm = R"rawliteral(
       <a class="header">Firmware Update</a>
       <br/>
@@ -2444,8 +2521,15 @@ const char* updateForm = R"rawliteral(
       <progress id="progress" class="uploadBar" value="0" max="100" style="visibility: hidden;"></progress><br/>
 )rawliteral";
 
-void updateControls() {
+void jsScripts() {
+  pageContent += restartScript;
   pageContent += updateScript;
+  pageContent += purgeKeysScript;
+  pageContent += factoryResetScript;
+  pageContent += purgeConfigScript;
+}
+
+void updateControls() {
   pageContent += updateForm;
 }
 
@@ -2503,7 +2587,7 @@ void displayFiles() {
       pageContent += "</td><td class='fileMgCell'>";
       pageContent += "<a class='fileMgLink' href='#' onclick='previewFile(\"";
       pageContent += name;
-      pageContent += "\")'>VIEW</a>";
+      pageContent += "\")'>EDIT</a>";
       pageContent += "</td><td class='fileMgCell'>";
       pageContent += "<a class='fileMgLink' href='/downloadFile/";
       pageContent += name;
@@ -2549,15 +2633,20 @@ void outputConfig() {
 }
 
 void MainPage() {
-  sendHTMLHeader();
-  siteButtons();
-  displayKeys();
-  bellSelect();
-  displayFiles();
-  updateControls();
-  statsPanel();
-  siteModes();
-  siteFooter();
+  sendHTMLHeader();            // Includes <body>, outer mainDiv, innerLeftDiv start
+  jsScripts();
+  siteButtons();               // inside innerLeftDiv
+  displayKeys();               // inside innerLeftDiv
+  pageContent += "        </div>\n";  // End innerLeftDiv
+  pageContent += "        <div class='innerRightDiv'>\n";
+  bellSelect();                // inside innerRightDiv
+  displayFiles();              // inside innerRightDiv
+  updateControls();            // inside innerRightDiv
+  statsPanel();                // inside innerRightDiv
+  siteModes();                 // still inside innerRightDiv
+  pageContent += "        </div>\n";  // End innerRightDiv
+  pageContent += "      </div>\n";    // End innerContainer
+  siteFooter();               // centered below both columns
   sendHTMLContent();
   sendHTMLStop();
 }
@@ -2748,13 +2837,15 @@ const char* html_head = R"rawliteral(
   <head>
     <meta name='viewport' content='width=device-width, initial-scale=1'>
     <style>
-      .mainDiv {width: 350px; margin: 20px auto; text-align: center; border: 3px solid #ff3200; background-color: #555555; left: auto; right: auto;}
+      .mainDiv {width: 700px; margin: 20px auto; text-align: center; border: 3px solid #ff3200; background-color: #555555;}
+      .innerContainer {display: flex; justify-content: space-between; gap: 2px; margin: 10px 0; background-color: #474747;}
+      .innerLeftDiv, .innerRightDiv {width: 350px; padding: 10px;}
       .header {font-family: Arial, Helvetica, sans-serif; font-size: 20px; color: #ff3200;}
       .smalltext {font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #ff3200;}
       .previewModal {display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:400px; background:white; border:2px solid black; padding:10px; z-index:1000;}
       .previewModal button {margin-top: 5px; margin-right: 10px;}
       .previewContent {max-height: 400px; overflow: auto; text-align: left;}
-      textarea.previewContent {padding: 5px; font-family: monospace; font-size: 12px; border: 1px solid #ccc;}
+      .previewContent {padding: 5px; font-family: monospace; font-size: 12px; border: 1px solid #ccc;}
       .keyTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; margin-top: 3px; border: 1px solid #ff3200; border-collapse: collapse;}
       .keyCell {height: 15px; color: #ff3200;}
       .keyDelCell {height: 15px; width: 45px; background-color: #ff3200; color: black;}
@@ -2784,9 +2875,9 @@ const char* html_head = R"rawliteral(
       .statsBox {background-color: #303030; font-size: 11px; width: 300px; height: 130px; resize: vertical; color: #ff3200;}
       .orangeButton {height 30px; width: 49px; auto;background-color: #ff3200; border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
       .orangeButton:hover {height 30px; width: 49px; background-color: #ef2200; border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
-      .addKeyInput {height 17px; width: 245px;border: 1px solid #ff3200; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black;}
-      .addKeyButton {height 30px; width: 49px; background-color: #ff3200; border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
-      .addKeyButton:hover {height 30px; width: 49px; background-color: #ef2200; border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
+      .addKeyInput {height 17px; width: 230px;border: 1px solid #ff3200; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black;}
+      .addKeyButton {height 30px; width: 60px; background-color: #ff3200; border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
+      .addKeyButton:hover {height 30px; width: 60px; background-color: #ef2200; border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
       tr, td {border: 1px solid #ff3200;}
       button {width: 300px; background-color: #ff3200; border: none; text-decoration: none;}
       button:hover {width: 300px; background-color: #ef2200; border: none; text-decoration: none;}
@@ -2803,9 +2894,9 @@ void siteHeader() {
   pageContent += "  <body>\n";
   pageContent += "    <div class='mainDiv'>\n";
   pageContent += "      <h1>DL32 MENU</h1>\n";
-  pageContent += "      <h3>";
-  pageContent += config.mqtt_client_name;
-  pageContent += "      </h3>\n";
+  pageContent += "      <h3>[ " + String(config.mqtt_client_name) + " ]</h3>\n";
+  pageContent += "      <div class='innerContainer'>\n";
+  pageContent += "        <div class='innerLeftDiv'>\n";
 }
 
 void siteModes() {
@@ -2850,7 +2941,7 @@ void siteButtons() {
   pageContent += "      <br/>\n";
   pageContent += "      <a href='/ringBellHTTP'><button>Ring Bell</button></a>\n";
   pageContent += "      <br/>\n";
-  pageContent += "      <a href='/restartESPHTTP'><button>Restart DL32</button></a>\n";
+  pageContent += "      <button onclick='confirmAndRestartDL32()'>Restart DL32</button>\n";
   pageContent += "      <br/>\n";
   pageContent += "      <br/>\n";
   pageContent += "      <a class='header'>System</a>\n";
@@ -2862,7 +2953,9 @@ void siteButtons() {
   pageContent += "      <br/>\n";
   pageContent += "      <a href='/configFFattoSDHTTP'><button>Download config DL32 to SD</button></a>\n";
   pageContent += "      <br/>\n";
-  pageContent += "      <a href='/purgeConfigHTTP'><button>Purge configuration</button></a>\n";
+  pageContent += "      <button onclick='confirmAndPurgeConfig()'>Purge configuration</button>\n";
+  pageContent += "      <br/>\n";
+  pageContent += "      <button onclick='confirmAndFactoryReset()'>[!] Factory reset [!]</button>\n";
   pageContent += "      <br/><br/>\n";
   pageContent += "      <a class='header'>IP Addressing</a>\n";
   if (staticIP) {
@@ -2894,7 +2987,7 @@ void siteButtons() {
   pageContent += "      <a href='/addKeyModeHTTP'><button>Enter add key mode</button></a>\n";
   pageContent += "      <br/>\n";
   if (FFat.exists(keys_filename)) {
-    pageContent += "      <a href='/purgeKeysHTTP'><button>Purge stored keys</button></a>\n";
+    pageContent += "      <button onclick='confirmAndPurgeKeys()'>Purge stored keys</button>\n";
     pageContent += "      <br/>\n";
   } 
 }
@@ -2902,22 +2995,22 @@ void siteButtons() {
 void siteFooter() {
   IPAddress ip_addr = WiFi.localIP();
   pageContent += "      <a class='smalltext'>";
-  pageContent += "IP: ";
+  pageContent += "[ IP: ";
   pageContent += (String(ip_addr[0]) + "." + String(ip_addr[1]) + "." + String(ip_addr[2]) + "." + String(ip_addr[3]));
   if (staticIP) {
     pageContent += "<sup>(S)</sup>";
   } else {
     pageContent += "<sup>(D)</sup>";
   }
-  pageContent += "</a>";
-  pageContent += "&nbsp;&nbsp;&nbsp;&nbsp;";
+  pageContent += " ]</a>";
+  pageContent += "&nbsp;&nbsp;&nbsp;";
   pageContent += "<a class='smalltext'>";
-  pageContent += "ver: ";
+  pageContent += "[ ver: ";
   pageContent += (String(codeVersion));
-  pageContent += "&nbsp;&nbsp;&nbsp;&nbsp;";
+  pageContent += " ]&nbsp;&nbsp;&nbsp;";
   pageContent += "</a>";
   pageContent += "<a class='smalltext' href='https://github.com/Mark-Roly/dl32-arduino' target='_blank' rel='noopener noreferrer'>";
-  pageContent += "github";
+  pageContent += "[ GitHub Link ]";
   pageContent += "</a>\n";
   pageContent += "      <br/><br/>\n";
   pageContent += "    </div>\n";
@@ -2955,6 +3048,11 @@ void startWebServer() {
   webServer.on("/addressingStaticSDtoFFatHTTP", addressingStaticSDtoFFatHTTP);
   webServer.on("/purgeAddressingStaticHTTP", purgeAddressingStaticHTTP);
   webServer.on("/githubOtaHTTP", githubOtaHTTP);
+  webServer.on("/factoryResetHTTP", []() {
+    factoryReset();
+    redirectHome();
+    restart();
+  });
   webServer.on(UriRegex("/setBell/([\\w\\.\\-]{1,32})"), HTTP_GET, [&]() {
     Serial.print("Setting bell tone from url ");
     Serial.println(webServer.pathArg(0));
