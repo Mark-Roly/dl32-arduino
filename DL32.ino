@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 2025-06-09
+  Last updated 2025-06-11
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250609
+#define codeVersion 20250611
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -54,6 +54,7 @@
 #include <vector>               // vector library from C++ standard library https://github.com/espressif/arduino-esp32
 #include <algorithm>            // algorithm library from C++ standard library https://github.com/espressif/arduino-esp32
 #include <HTTPClient.h>         // HTTPClient by Markus Sattler https://github.com/espressif/arduino-esp32/tree/master/libraries/HTTPClient
+#include <ESPmDNS.h>
 
 // Hardware Rev 20240812 pins [Since codeVersion 20240819]
 #define attSensor_pin 9
@@ -126,6 +127,7 @@ struct Config {
   int wiegand_0_pin;
   int wiegand_1_pin;
   int pixelBrightness;
+  char theme[8];
 };
 
 // Variables for FreeRTOS non-blocking bell task
@@ -292,7 +294,7 @@ void printStats() {
   } else {
     statsPayload += "SD Card present: false\n";
   }
-  statsPayload += "FFat free space: " + formatNumber(FFat.usedBytes()/1024) + "kB of " +  formatNumber(FFat.totalBytes()/1024) + "kB used" + "\n";
+  statsPayload += "FFat space: " + formatNumber(FFat.usedBytes()/1024) + "kB of " +  formatNumber(FFat.totalBytes()/1024) + "kB used" + "\n";
   if (digitalRead(SD_CD_PIN) == LOW) {
     statsPayload += "SD space: " + formatNumber(SD.usedBytes()/1024) + "kB of " + formatNumber(SD.totalBytes()/1024) + "kB used";
   }
@@ -312,7 +314,7 @@ void statsPanel() {
   } else {
     statsPayload += "SD Card present: false\n";
   }
-  statsPayload += "FFat free space: " + formatNumber(FFat.usedBytes()/1024) + "kB of " +  formatNumber(FFat.totalBytes()/1024) + "kB used" + "\n";
+  statsPayload += "FFat space: " + formatNumber(FFat.usedBytes()/1024) + "kB of " +  formatNumber(FFat.totalBytes()/1024) + "kB used" + "\n";
   if (digitalRead(SD_CD_PIN) == LOW) {
     statsPayload += "SD space: " + formatNumber(SD.usedBytes()/1024) + "kB of " + formatNumber(SD.totalBytes()/1024) + "kB used" + "\n";
   }
@@ -918,6 +920,7 @@ bool loadFSJSON_config(const char* config_filename, Config& config) {
   config.wiegand_0_pin = returnGHpin(config_doc["wiegand_0_gh"].as<int>(), def_wiegand_0_pin);
   config.wiegand_1_pin = returnGHpin(config_doc["wiegand_1_gh"].as<int>(), def_wiegand_1_pin);
   config.pixelBrightness = returnPixelBrightness(config_doc["pixelBrightness"] | 1);
+  strlcpy(config.theme, config_doc["theme"] | "orange", sizeof(config.theme));
   config_file.close();
   return true;
 }
@@ -1232,15 +1235,16 @@ int connectWifi() {
       (staticIP == false);
     }
   }
-  WiFi.mode(WIFI_STA); //Optional
+  WiFi.disconnect(true); // Erase WiFi config
+  delay(100);
+  WiFi.mode(WIFI_MODE_STA);
+  WiFi.setHostname(config.mqtt_client_name);
   Serial.print("Connecting to SSID " + (String)config.wifi_ssid);
   //Serial.print(" with password ");
   //Serial.print(config.wifi_password);
+  WiFi.begin(config.wifi_ssid, config.wifi_password);
   int count = 0;
   lastWifiConnectAttempt = millis();
-  WiFi.begin(config.wifi_ssid, config.wifi_password);
-  WiFi.mode(WIFI_MODE_STA);
-  
   while(WiFi.status() != WL_CONNECTED){
     Serial.print(".");
     delay(1000);
@@ -1255,6 +1259,8 @@ int connectWifi() {
   }
   Serial.print("\nSuccessfully connected to SSID ");
   Serial.println(config.wifi_ssid);
+  Serial.println("WiFi hostname: " + String(WiFi.getHostname()));
+  MDNS.begin(config.mqtt_client_name);
   if (config.mqtt_enabled) {
     if (config.mqtt_tls) {
       startMQTTConnection_tls();
@@ -1566,9 +1572,7 @@ void checkMagSensor() {
 void bellTask(void* parameter) {
   String sequence = *(String*)parameter;
   delete (String*)parameter;  // Free heap
-
   parseAndPlaySequence(sequence);
-
   bellTaskHandle = nullptr;  // Mark as complete
   vTaskDelete(nullptr);      // Delete self
 }
@@ -1577,7 +1581,7 @@ void loadBellFile() {
   File file = FFat.open(bell_filename);
   bellFile = "";
   if (!file) {
-    Serial.println("FAILED: Using default");
+    Serial.println("Using default");
     bellFile = "Default Tone:1:0 C#4 1 43;1 D4 1 43;2 D#4 1 43;3 E4 1 43;4 C#4 1 43;5 D4 1 43;6 D#4 1 43;7 E4 1 43;8 C#4 1 43;9 D4 1 43;10 D#4 1 43;11 E4 1 43;12 C#4 1 43;13 D4 1 43;14 D#4 1 43;15 E4 1 43;:";
     return;
   }
@@ -2193,7 +2197,7 @@ boolean executeCommand(String command) {
   } else if (command.equals("reboot")) {
     restart();
   } else if (command.equals("github_ota")) {
-    if (handleGithubOTA()) {
+    if (handleGithubOtaLatest()) {
       mqttPublish(config.mqtt_stat_topic, "GitHub OTA update completed successfully");
     } else {
       mqttPublish(config.mqtt_stat_topic, "GitHub OTA update failed");
@@ -2310,8 +2314,6 @@ void outputKeys() {
 
 // Restart unit
 void restartESPHTTP() {
-  redirectHome();
-  delay(1000);
   restart();
 }
 
@@ -2380,7 +2382,7 @@ void bellSelect() {
   pageContent += "      <br/>\n";
 }
 
-const char* updateScript = R"rawliteral(
+const char* fileOtaScript = R"rawliteral(
       <script>
         function uploadFirmware() {
           var file = document.getElementById("firmware").files[0];
@@ -2410,6 +2412,36 @@ const char* updateScript = R"rawliteral(
           xhr.send(formData);
         }
       </script>
+)rawliteral";
+
+const char* githubOtaLatestScript = R"rawliteral(
+      <script>
+        function startGithubLatestUpdate() {
+          if (!confirm("[ ! ] CAUTION [ ! ]\nThis will initiate a GitHub OTA update!\nDevice will restart after update.\nAre you sure you want to continue?")) return;
+          const progress = document.getElementById("progress");
+          progress.style.visibility = 'visible';
+          progress.value = 5;
+          const interval = setInterval(() => {
+            if (progress.value < 90) {
+              progress.value += 5;
+            }
+          }, 500); // fake smooth progress
+          fetch('/githubOtaLatestHTTP')
+          .then(res => {
+            clearInterval(interval);
+            progress.value = 100;
+            alert("Update started.\nIf successful, device will reboot shortly.");
+          })
+          .catch(err => {
+            clearInterval(interval);
+            progress.style.visibility = 'hidden';
+            alert("Error starting update: " + err.message);
+          });
+        }
+      </script>
+)rawliteral";
+
+const char* githubOtaVersionScript = R"rawliteral(
       <script>
         function startGithubUpdate() {
           if (!confirm("!!!CAUTION!!!\nThis will initiate a GitHub OTA update!\nDevice will restart after update.\nAre you sure you want to continue?")) return;
@@ -2421,7 +2453,7 @@ const char* updateScript = R"rawliteral(
               progress.value += 5;
             }
           }, 500); // fake smooth progress
-          fetch('/githubOtaHTTP')
+          fetch('/githubOtaLatestHTTP')
           .then(res => {
             clearInterval(interval);
             progress.value = 100;
@@ -2448,9 +2480,6 @@ const char* restartScript = R"rawliteral(
                 alert("Restart request failed. Please try again.");
               }
             })
-            .catch(error => {
-              alert("Error sending restart request: " + error.message);
-            });
         }
       </script>
 )rawliteral";
@@ -2509,10 +2538,10 @@ const char* factoryResetScript = R"rawliteral(
       </script>
 )rawliteral";
 
-const char* updateForm = R"rawliteral(
+const char* otaUpdateForm = R"rawliteral(
       <a class="header">Firmware Update</a>
       <br/>
-      <button onclick="startGithubUpdate()">Update to latest GitHub release</button>
+      <button onclick="startGithubLatestUpdate()">Update to latest GitHub release</button>
       <br/>
       <div class="inputRow">
         <input type="file" name="file" class="firmwareInputFile" id="firmware" required>
@@ -2523,23 +2552,25 @@ const char* updateForm = R"rawliteral(
 
 void jsScripts() {
   pageContent += restartScript;
-  pageContent += updateScript;
+  pageContent += fileOtaScript;
+  pageContent += githubOtaLatestScript;
+  pageContent += githubOtaVersionScript;
   pageContent += purgeKeysScript;
   pageContent += factoryResetScript;
   pageContent += purgeConfigScript;
 }
 
 void updateControls() {
-  pageContent += updateForm;
+  pageContent += otaUpdateForm;
 }
 
 // Display file management pane
 void displayFiles() {
-  pageContent += "      <div id='previewModal' class='previewModal' style='display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:600px; height:auto; background:white; border:2px solid black; padding:10px; z-index:1000;'>\n";
+  pageContent += "      <div id='previewModal' class='previewModal' style='display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:600px; height:auto; background: var(--themeCol03); border:2px solid black; padding:10px; z-index:1000;'>\n";
   pageContent += "        <textarea id='previewContent' class='previewContent' style='width:100%; height:500px; font-family:monospace; font-size:12px; resize:vertical; box-sizing:border-box;'></textarea>\n";
   pageContent += "        <div style='margin-top:8px; display:flex; justify-content:space-between; gap:10px;'>\n";
-  pageContent += "          <button onclick='savePreviewFile()' style='flex:1; height:32px; background-color:#00cc00; color:white; border:none;'>Save</button>\n";
-  pageContent += "          <button onclick='closePreview()' style='flex:1; height:32px; background-color:#ff3200; color:white; border:none;'>Close</button>\n";
+  pageContent += "          <button onclick='savePreviewFile()' style='flex:1; height:20px; background-color:var(--themeCol01); color:black; border:none;'>Save</button>\n";
+  pageContent += "          <button onclick='closePreview()' style='flex:1; height:20px; background-color: var(--themeCol01); color:black; border:none;'>Close</button>\n";
   pageContent += "        </div>\n";
   pageContent += "      </div>\n";
   pageContent += "      <script>\n";
@@ -2632,21 +2663,45 @@ void outputConfig() {
   redirectHome();
 }
 
+void openContainerDiv() {
+  pageContent += "      <div class='innerContainer'>\n";
+}
+void openInnerLeftDiv() {
+  pageContent += "      <div class='innerLeftDiv'>\n";
+}
+
+void openInnerRightDiv() {
+  pageContent += "      <div class='innerRightDiv'>\n";
+}
+
+void closeInnerDiv() {
+  pageContent += "      </div>\n";
+}
+
+void closeContainerDiv() {
+  pageContent += "      </div>\n";
+}
+
 void MainPage() {
-  sendHTMLHeader();            // Includes <body>, outer mainDiv, innerLeftDiv start
+  sendHTMLHeader();
   jsScripts();
-  siteButtons();               // inside innerLeftDiv
-  displayKeys();               // inside innerLeftDiv
-  pageContent += "        </div>\n";  // End innerLeftDiv
-  pageContent += "        <div class='innerRightDiv'>\n";
-  bellSelect();                // inside innerRightDiv
-  displayFiles();              // inside innerRightDiv
-  updateControls();            // inside innerRightDiv
-  statsPanel();                // inside innerRightDiv
-  siteModes();                 // still inside innerRightDiv
-  pageContent += "        </div>\n";  // End innerRightDiv
-  pageContent += "      </div>\n";    // End innerContainer
-  siteFooter();               // centered below both columns
+  openContainerDiv();
+
+  openInnerLeftDiv();
+  siteButtons();
+  displayKeys();
+  closeInnerDiv();
+
+  openInnerRightDiv();
+  bellSelect();
+  displayFiles();
+  updateControls();
+  statsPanel();
+  closeInnerDiv();
+
+  closeContainerDiv();
+  siteModes();
+  siteFooter();
   sendHTMLContent();
   sendHTMLStop();
 }
@@ -2788,10 +2843,10 @@ void addressingStaticSDtoFFatHTTP() {
   addressingSDtoFFat();
 }
 
-void githubOtaHTTP() {
+void githubOtaLatestHTTP() {
   webServer.send(200, "text/plain", "OTA started");
   delay(100);  // Allow time for response to flush before rebooting
-  if (handleGithubOTA()) {
+  if (handleGithubOtaLatest()) {
     mqttPublish(config.mqtt_stat_topic, "GitHub OTA update completed successfully");
   } else {
     mqttPublish(config.mqtt_stat_topic, "GitHub OTA update failed");
@@ -2835,55 +2890,59 @@ const char* html_head = R"rawliteral(
 <!DOCTYPE html>
 <html>
   <head>
+    <title>DL32 Smart Lock Controller</title>
     <meta name='viewport' content='width=device-width, initial-scale=1'>
+)rawliteral";
+
+const char* html_style = R"rawliteral(
     <style>
-      .mainDiv {width: 700px; margin: 20px auto; text-align: center; border: 3px solid #ff3200; background-color: #555555;}
+      .mainDiv {width: 700px; margin: 20px auto; text-align: center; border: 3px solid var(--themeCol01); background-color: var(--themeCol03);}
       .innerContainer {display: flex; justify-content: space-between; gap: 2px; margin: 10px 0; background-color: #474747;}
       .innerLeftDiv, .innerRightDiv {width: 350px; padding: 10px;}
-      .header {font-family: Arial, Helvetica, sans-serif; font-size: 20px; color: #ff3200;}
-      .smalltext {font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #ff3200;}
+      .header {font-family: Arial, Helvetica, sans-serif; font-size: 20px; color: var(--themeCol01);}
+      .smalltext {font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: var(--themeCol01);}
       .previewModal {display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:400px; background:white; border:2px solid black; padding:10px; z-index:1000;}
       .previewModal button {margin-top: 5px; margin-right: 10px;}
       .previewContent {max-height: 400px; overflow: auto; text-align: left;}
       .previewContent {padding: 5px; font-family: monospace; font-size: 12px; border: 1px solid #ccc;}
-      .keyTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; margin-top: 3px; border: 1px solid #ff3200; border-collapse: collapse;}
-      .keyCell {height: 15px; color: #ff3200;}
-      .keyDelCell {height: 15px; width: 45px; background-color: #ff3200; color: black;}
-      .keyDelCell:hover {height: 15px; width: 45px; background-color: #ef2200; color: black; border: 1px solid #000000}
+      .keyTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; margin-top: 3px; border: 1px solid var(--themeCol01); border-collapse: collapse;}
+      .keyCell {height: 15px; color: var(--themeCol01);}
+      .keyDelCell {height: 15px; width: 45px; background-color: var(--themeCol01); color: black;}
+      .keyDelCell:hover {height: 15px; width: 45px; background-color: var(--themeCol02); color: black; border: 1px solid #000000}
       .keyDelLink {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; text-decoration: none;}
-      .fileTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; border: 1px solid #ff3200; border-collapse: collapse;}
-      .fileCell {height: 15px; color: #ff3200;}
-      .fileMgCell {height: 15px; width: 45px; background-color: #ff3200; color: black; border: 1px solid #000000}
-      .fileMgCell:hover {height: 15px; width: 45px; background-color: #ef2200; color: black; border: 1px solid #000000}
+      .fileTable {background-color: #303030; font-size: 11px; width: 300px; resize: vertical; margin-left: auto; margin-right: auto; border: 1px solid var(--themeCol01); border-collapse: collapse;}
+      .fileCell {height: 15px; color: var(--themeCol01);}
+      .fileMgCell {height: 15px; width: 45px; background-color: var(--themeCol01); color: black; border: 1px solid #000000}
+      .fileMgCell:hover {height: 15px; width: 45px; background-color: var(--themeCol02); color: black; border: 1px solid #000000}
       .fileMgLink {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; text-decoration: none;}
-      .fileMgInputFile {height: 18px; width: 235px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .fileMgInputFile:hover {height: 18px; width: 235px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
-      .fileMgInputButton {height: 18px; width: 60px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .fileMgInputButton:hover {height: 18px; width: 60px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
-      .firmwareInputFile {height: 18px; margin-top: 5px; width: 235px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .firmwareInputFile:hover {height: 18px; margin-top: 5px; width: 235px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
-      .firmwareInputButton {height: 18px; margin-top: 5px; width: 60px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .firmwareInputButton:hover {height: 18px; margin-top: 5px; width: 60px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
-      .targetBell {height: 18px; width: 175px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .targetBell:hover {height: 18px; width: 175px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
-      .targetBellButton {height: 18px; width: 60px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .targetBellButton:hover {height: 18px; width: 60px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .fileMgInputFile {height: 18px; width: 235px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .fileMgInputFile:hover {height: 18px; width: 235px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .fileMgInputButton {height: 18px; width: 60px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .fileMgInputButton:hover {height: 18px; width: 60px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .firmwareInputFile {height: 18px; margin-top: 5px; width: 235px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .firmwareInputFile:hover {height: 18px; margin-top: 5px; width: 235px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .firmwareInputButton {height: 18px; margin-top: 5px; width: 60px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .firmwareInputButton:hover {height: 18px; margin-top: 5px; width: 60px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .targetBell {height: 18px; width: 175px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .targetBell:hover {height: 18px; width: 175px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .targetBellButton {height: 18px; width: 60px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .targetBellButton:hover {height: 18px; width: 60px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
       .inputRow {display: flex; flex-direction: row; gap: 2px; justify-content: center; align-items: center; border: 0;}
-      .updateInput {height: 18px; margin-left:0px; background-color: #ff3200; color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .updateInput:hover {height: 18px; margin-left:0px; background-color: #ef2200; color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .updateInput {height: 18px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .updateInput:hover {height: 18px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
       .uploadBar {width:300px;}
-      .statsBox {background-color: #303030; font-size: 11px; width: 300px; height: 130px; resize: vertical; color: #ff3200;}
-      .orangeButton {height 30px; width: 49px; auto;background-color: #ff3200; border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
-      .orangeButton:hover {height 30px; width: 49px; background-color: #ef2200; border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
-      .addKeyInput {height 17px; width: 230px;border: 1px solid #ff3200; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black;}
-      .addKeyButton {height 30px; width: 60px; background-color: #ff3200; border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
-      .addKeyButton:hover {height 30px; width: 60px; background-color: #ef2200; border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid #ff3200;}
-      tr, td {border: 1px solid #ff3200;}
-      button {width: 300px; background-color: #ff3200; border: none; text-decoration: none;}
-      button:hover {width: 300px; background-color: #ef2200; border: none; text-decoration: none;}
-      h1 {font-family: Arial, Helvetica, sans-serif; color: #ff3200;}
-      h3 {font-family: Arial, Helvetica, sans-serif; color: #ff3200;}
-      a {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: #ff3200;}
+      .statsBox {background-color: #303030; font-size: 11px; width: 300px; height: 130px; resize: vertical; color: var(--themeCol01);}
+      .orangeButton {height 30px; width: 49px; auto;background-color: var(--themeCol01); border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid var(--themeCol01);}
+      .orangeButton:hover {height 30px; width: 49px; background-color: var(--themeCol02); border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid var(--themeCol01);}
+      .addKeyInput {height 17px; width: 230px;border: 1px solid var(--themeCol01); font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black;}
+      .addKeyButton {height 30px; width: 60px; background-color: var(--themeCol01); border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid var(--themeCol01);}
+      .addKeyButton:hover {height 30px; width: 60px; background-color: var(--themeCol02); border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid var(--themeCol01);}
+      tr, td {border: 1px solid var(--themeCol01);}
+      button {width: 300px; background-color: var(--themeCol01); border: none; text-decoration: none;}
+      button:hover {width: 300px; background-color: var(--themeCol02); border: none; text-decoration: none;}
+      h1 {font-family: Arial, Helvetica, sans-serif; color: var(--themeCol01);}
+      h3 {font-family: Arial, Helvetica, sans-serif; color: var(--themeCol01);}
+      a {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: var(--themeCol01);}
       body {background-color: #303030; text-align: center;}
     </style>
   </head>
@@ -2891,12 +2950,34 @@ const char* html_head = R"rawliteral(
 
 void siteHeader() {
   pageContent = html_head;
+  pageContent += "    <style>\n";
+  if (!strcmp(config.theme, "orange")) {
+    pageContent += "      :root {--themeCol01: #ff3200; --themeCol02: #ef2200; --themeCol03: #555555;}\n";
+  } else if (!strcmp(config.theme, "green")) {
+    pageContent += "      :root {--themeCol01: #00ff00; --themeCol02: #00cc00; --themeCol03: #555555;}\n";
+  } else if (!strcmp(config.theme, "yellow")) {
+    pageContent += "      :root {--themeCol01: #ffff00; --themeCol02: #cccc00; --themeCol03: #555555;}\n";
+  } else if (!strcmp(config.theme, "purple")) {
+    pageContent += "      :root {--themeCol01: #cc33ff; --themeCol02: #aa11dd; --themeCol03: #555555;}\n";
+  } else if (!strcmp(config.theme, "red")) {
+    pageContent += "      :root {--themeCol01: #ff0000; --themeCol02: #cc0000; --themeCol03: #555555;}\n";
+  } else if (!strcmp(config.theme, "blue")) {
+    pageContent += "      :root {--themeCol01: #0000ff; --themeCol02: #0000cc; --themeCol03: #555555;}\n";
+  } else if (!strcmp(config.theme, "pink")) {
+    pageContent += "      :root {--themeCol01: #ff66dd; --themeCol02: #cc33bb; --themeCol03: #555555;}\n";
+  } else if (!strcmp(config.theme, "aqua")) {
+    pageContent += "      :root {--themeCol01: #00ffff; --themeCol02: #00cccc; --themeCol03: #555555;}\n";
+  } else if (!strcmp(config.theme, "grey")) {
+    pageContent += "      :root {--themeCol01: #cccccc; --themeCol02: #aaaaaa; --themeCol03: #555555;}\n";
+  } else {
+    pageContent += "      :root {--themeCol01: #ff3200; --themeCol02: #ef2200; --themeCol03: #555555;}\n";
+  }
+  pageContent += "    </style>";
+  pageContent += html_style;
   pageContent += "  <body>\n";
   pageContent += "    <div class='mainDiv'>\n";
   pageContent += "      <h1>DL32 MENU</h1>\n";
-  pageContent += "      <h3>[ " + String(config.mqtt_client_name) + " ]</h3>\n";
-  pageContent += "      <div class='innerContainer'>\n";
-  pageContent += "        <div class='innerLeftDiv'>\n";
+  pageContent += "      <h3>[ " + String(config.mqtt_client_name) + " ]</h3>";
 }
 
 void siteModes() {
@@ -2939,7 +3020,7 @@ void siteButtons() {
     pageContent += "      <a href='/unlockHTTP'><button>Unlock</button></a>\n";
   }
   pageContent += "      <br/>\n";
-  pageContent += "      <a href='/ringBellHTTP'><button>Ring Bell</button></a>\n";
+  pageContent += "      <a href='/ringBellHTTP'><button>Ring bell</button></a>\n";
   pageContent += "      <br/>\n";
   pageContent += "      <button onclick='confirmAndRestartDL32()'>Restart DL32</button>\n";
   pageContent += "      <br/>\n";
@@ -2955,7 +3036,7 @@ void siteButtons() {
   pageContent += "      <br/>\n";
   pageContent += "      <button onclick='confirmAndPurgeConfig()'>Purge configuration</button>\n";
   pageContent += "      <br/>\n";
-  pageContent += "      <button onclick='confirmAndFactoryReset()'>[!] Factory reset [!]</button>\n";
+  pageContent += "      <button onclick='confirmAndFactoryReset()'>[ ! ] Factory reset [ ! ]</button>\n";
   pageContent += "      <br/><br/>\n";
   pageContent += "      <a class='header'>IP Addressing</a>\n";
   if (staticIP) {
@@ -3047,7 +3128,10 @@ void startWebServer() {
   webServer.on("/saveAddressingStaticHTTP", saveAddressingStaticHTTP);
   webServer.on("/addressingStaticSDtoFFatHTTP", addressingStaticSDtoFFatHTTP);
   webServer.on("/purgeAddressingStaticHTTP", purgeAddressingStaticHTTP);
-  webServer.on("/githubOtaHTTP", githubOtaHTTP);
+  webServer.on("/githubOtaLatestHTTP", githubOtaLatestHTTP);
+  webServer.on(UriRegex("/githubOtaVersionHTTP/([0-9]{8})"), HTTP_GET, [&]() {
+    githubOtaVersionHTTP();
+  });
   webServer.on("/factoryResetHTTP", []() {
     factoryReset();
     redirectHome();
@@ -3260,7 +3344,56 @@ bool getLatestGitHubTag() {
   return false;
 }
 
-bool handleGithubOTA() {
+bool validateGitHubTag(String version) {
+  WiFiClientSecure githubClient;
+  githubClient.setInsecure();  // Insecure for simplicity; use certificates for production
+  HTTPClient https;
+  String url = "https://api.github.com/repos/" + String(otaGithubAccount) + "/" + String(otaGithubRepo) + "/tags";
+  if (!https.begin(githubClient, url)) {
+    Serial.println("Failed to begin HTTPS connection");
+    return false;
+  }
+  https.addHeader("User-Agent", "ESP32");
+  int httpCode = https.GET();
+  if (httpCode != HTTP_CODE_OK) {
+    Serial.printf("GitHub API request failed: %d\n", httpCode);
+    https.end();
+    return false;
+  }
+
+  String payload = https.getString();
+  https.end();
+
+  DynamicJsonDocument doc(32768); // Adjust size if needed
+  DeserializationError error = deserializeJson(doc, payload);
+  if (error) {
+    Serial.print("JSON parse error: ");
+    Serial.println(error.c_str());
+    return false;
+  }
+
+  if (!doc.is<JsonArray>()) {
+    Serial.println("Expected JSON array from GitHub API.");
+    return false;
+  }
+
+  // Iterate through tags and look for a match
+  for (JsonObject tag : doc.as<JsonArray>()) {
+    if (tag["name"].as<String>() == version) {
+      Serial.print("GitHub release ");
+      Serial.print(version);
+      Serial.println(" found.");
+      return true;
+    }
+  }
+
+  Serial.print("GitHub release ");
+  Serial.print(version);
+  Serial.println(" not found.");
+  return false;
+}
+
+bool handleGithubOtaLatest() {
   if (getLatestGitHubTag()) {
     WiFiClientSecure client;
     client.setInsecure();  // Skip certificate validation for testing
@@ -3320,6 +3453,82 @@ bool handleGithubOTA() {
     return true;
   } else {
     Serial.println("Could not determine latest github release");
+    return false;
+  }
+}
+
+void githubOtaVersionHTTP() {
+  if (webServer.pathArg(0).length() == 0) {
+    Serial.println("Error: No version tag provided.");
+    webServer.send(400, "text/plain", "Version tag required");
+    redirectHome();
+    return;
+  }
+  String version = webServer.pathArg(0);
+  redirectHome();
+  handleGithubOtaVersion(version);
+}
+
+bool handleGithubOtaVersion(String version) {
+  if (validateGitHubTag(version)) {
+    WiFiClientSecure client;
+    client.setInsecure();  // Skip certificate validation for testing
+    // Build download URL
+    String url = "https://github.com/" + String(otaGithubAccount) + "/" + String(otaGithubRepo) + "/releases/download/" + version + "/" + String(otaGithubBinary);
+    mqttPublish(config.mqtt_stat_topic, "Performing OTA update from GitHub");
+    Serial.println("Performing OTA update from GitHub");
+    Serial.println("Starting OTA update...");
+    Serial.println("Download URL: " + url);
+    HTTPClient https;
+    if (!https.begin(client, url)) {
+      Serial.println("Failed to begin HTTPS connection");
+      return false;
+    }
+    // Required to follow GitHub's redirect to the actual binary URL
+    https.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    https.addHeader("User-Agent", "ESP32");
+    int httpCode = https.GET();
+    if (httpCode != HTTP_CODE_OK) {
+      Serial.printf("HTTP GET failed, code: %d\n", httpCode);
+      https.end();
+      return false;
+    }
+    int contentLength = https.getSize();
+    if (contentLength <= 0) {
+      Serial.println("Invalid content length.");
+      https.end();
+      return false;
+    }
+    if (!Update.begin(contentLength)) {
+     Serial.println("Update.begin() failed");
+      https.end();
+      return false;
+    }
+    WiFiClient* stream = https.getStreamPtr();
+    size_t written = Update.writeStream(*stream);
+    if (written != contentLength) {
+      Serial.printf("Written %d/%d bytes\n", (int)written, contentLength);
+      https.end();
+      return false;
+    }
+    if (!Update.end()) {
+      Serial.println("Update.end() failed");
+      https.end();
+      return false;
+    }
+    if (!Update.isFinished()) {
+      Serial.println("Update not finished");
+      https.end();
+      return false;
+    }
+    Serial.println("OTA update complete");
+    mqttPublish(config.mqtt_stat_topic, "OTA update complete");
+    https.end();
+    delay(1000);
+    restart();
+    return true;
+  } else {
+    Serial.println("Could not find requested github release");
     return false;
   }
 }
