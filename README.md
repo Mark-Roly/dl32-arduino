@@ -59,12 +59,12 @@ See descriptions of supported configuration parameters below:
 <tr><td width="140">mqtt_client_name</td><td width="150">(string, "dl32s3")</td><td width="660">Client name to use for mqtt connection</td></tr>
 <tr><td width="140">mqtt_tls</td><td width="150">(bool, false)</td><td width="660">Dictates whether connection to the broker uses tls private key authentication (Disregards mqtt_auth, mqtt_user and mqtt_password when true. Requires 3x cert/key files. See doc)</td></tr>
 <tr><td width="140">mqtt_auth</td><td width="150">(bool, false)</td><td width="660">Dictates whether username/password credentials should be used for mqtt connection. Not valid when mqtt_tls is enabled.</td></tr>
-<tr><td width="140">mqtt_user</td><td width="150">(string, &ldquo;dl32s3&rdquo;)</td><td width="660">Username for mqtt broker connection. Not valid when mqtt_tls is enabled.</td></tr>
-<tr><td width="140">mqtt_password</td><td width="150">(string, &ldquo;dl32s3&rdquo;)</td><td width="660">Password for mqtt broker connection. Not valid when mqtt_tls is enabled.</td></tr>
+<tr><td width="140">mqtt_user</td><td width="150">(String, &ldquo;dl32s3&rdquo;)</td><td width="660">Username for mqtt broker connection. Not valid when mqtt_tls is enabled.</td></tr>
+<tr><td width="140">mqtt_password</td><td width="150">(String, &ldquo;dl32s3&rdquo;)</td><td width="660">Password for mqtt broker connection. Not valid when mqtt_tls is enabled.</td></tr>
 <tr><td width="140">magsr_present</td><td width="150">(bool, false)</td><td width="660">Dictates whether or not a connected magnetic door sensor should be used</td></tr>
 <tr><td width="140">ftp_enabled</td><td width="150">(bool, false)</td><td width="660">Dictates whether or not the onboard ftp service is enabled</td></tr>
-<tr><td width="140">ftp_user</td><td width="150">(string, &ldquo;dl32s3&rdquo;)</td><td width="660">Username for ftp connections</td></tr>
-<tr><td width="140">ftp_password</td><td width="150">(string, &ldquo;dl32s3&rdquo;)</td><td width="660">Password for ftp connections</td></tr>
+<tr><td width="140">ftp_user</td><td width="150">(String, &ldquo;dl32s3&rdquo;)</td><td width="660">Username for ftp connections</td></tr>
+<tr><td width="140">ftp_password</td><td width="150">(String, &ldquo;dl32s3&rdquo;)</td><td width="660">Password for ftp connections</td></tr>
 <tr><td width="140">exitUnlockDur_S</td><td width="150">(bool, 5)</td><td width="660">Time in seconds that the lock will remain unlocked for when exit button is pressed</td></tr>
 <tr><td width="140">httpUnlockDur_S</td><td width="150">(bool, 5)</td><td width="660">Time in seconds that the lock will remain unlocked for when Web UI unlock is performed</td></tr>
 <tr><td width="140">keyUnlockDur_S</td><td width="150">(bool, 5)</td><td width="660">Time in seconds that the lock will remain unlocked for when valid RFID key is read</td></tr>
@@ -84,6 +84,7 @@ See descriptions of supported configuration parameters below:
 <tr><td width="140">wiegand_0_gh</td><td width="150">(int)</td><td width="660">GPIO Header pin to reassign wiegand 0 input to. (Requires external LLC)</td></tr>
 <tr><td width="140">wiegand_1_gh</td><td width="150">(int)</td><td width="660">GPIO Header pin to reassign wiegand 1 input to. (Requires external LLC)</td></tr>
 <tr><td width="140">pixelBrightness</td><td width="150">(int, 1)</td><td width="660">Brightness level of RGB Neopixel. 0-10. 0 is off  and 10 is brightest.</td></tr>
+<tr><td width="140">theme</td><td width="150">(String, "orange")</td><td width="660">WebUI Colour theme. Supports orange, green, yellow, purple, red, blue, pink, aqua, grey</td></tr>
 </table>
 
 ### Flashing configuration to the unit
