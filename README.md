@@ -65,15 +65,15 @@ See descriptions of supported configuration parameters below:
 <tr><td width="140">ftp_enabled</td><td width="150">(bool, false)</td><td width="660">Dictates whether or not the onboard ftp service is enabled</td></tr>
 <tr><td width="140">ftp_user</td><td width="150">(String, &ldquo;dl32s3&rdquo;)</td><td width="660">Username for ftp connections</td></tr>
 <tr><td width="140">ftp_password</td><td width="150">(String, &ldquo;dl32s3&rdquo;)</td><td width="660">Password for ftp connections</td></tr>
-<tr><td width="140">exitUnlockDur_S</td><td width="150">(bool, 5)</td><td width="660">Time in seconds that the lock will remain unlocked for when exit button is pressed</td></tr>
-<tr><td width="140">httpUnlockDur_S</td><td width="150">(bool, 5)</td><td width="660">Time in seconds that the lock will remain unlocked for when Web UI unlock is performed</td></tr>
-<tr><td width="140">keyUnlockDur_S</td><td width="150">(bool, 5)</td><td width="660">Time in seconds that the lock will remain unlocked for when valid RFID key is read</td></tr>
-<tr><td width="140">cmndUnlockDur_S</td><td width="150">(bool, 5)</td><td width="660">Time in seconds that the lock will remain unlocked for when url/mqtt/serial unlock command is sent</td></tr>
-<tr><td width="140">badKeyLockoutDur_S</td><td width="150">(bool, 5)</td><td width="660">Time in seconds that the unit will turn unresponsive for with the red led illuminated when an unauthorized key is read</td></tr>
-<tr><td width="140">exitButMinThresh_Ms</td><td width="150">(bool, 50)</td><td width="660">Minimum time in miliseconds that the exit button must be pressed for to register an unlock</td></tr>
-<tr><td width="140">keyWaitDur_Ms</td><td width="150">(bool, 1500)</td><td width="660">Timeout in miliseconds between keypad digits eg: max time between button presses for keypad input</td></tr>
-<tr><td width="140">garageMomentaryDur_Ms</td><td width="150">(bool, 500)</td><td width="660">Time in miliseconds that the momentary signal will be on when in garage mode</td></tr>
-<tr><td width="140">addKeyTimeoutDur_S</td><td width="150">(bool, 10)</td><td width="660">Time in seconds that the unit will await a new card when in Key Add Mode before timing out</td></tr>
+<tr><td width="140">exitUnlockDur_S</td><td width="150">(int, 5)</td><td width="660">Time in seconds that the lock will remain unlocked for when exit button is pressed</td></tr>
+<tr><td width="140">httpUnlockDur_S</td><td width="150">(int, 5)</td><td width="660">Time in seconds that the lock will remain unlocked for when Web UI unlock is performed</td></tr>
+<tr><td width="140">keyUnlockDur_S</td><td width="150">(int, 5)</td><td width="660">Time in seconds that the lock will remain unlocked for when valid RFID key is read</td></tr>
+<tr><td width="140">cmndUnlockDur_S</td><td width="150">(int, 5)</td><td width="660">Time in seconds that the lock will remain unlocked for when url/mqtt/serial unlock command is sent</td></tr>
+<tr><td width="140">badKeyLockoutDur_S</td><td width="150">(int, 5)</td><td width="660">Time in seconds that the unit will turn unresponsive for with the red led illuminated when an unauthorized key is read</td></tr>
+<tr><td width="140">exitButMinThresh_Ms</td><td width="150">(int, 50)</td><td width="660">Minimum time in miliseconds that the exit button must be pressed for to register an unlock</td></tr>
+<tr><td width="140">keyWaitDur_Ms</td><td width="150">(int, 1500)</td><td width="660">Timeout in miliseconds between keypad digits eg: max time between button presses for keypad input</td></tr>
+<tr><td width="140">garageMomentaryDur_Ms</td><td width="150">(int, 500)</td><td width="660">Time in miliseconds that the momentary signal will be on when in garage mode</td></tr>
+<tr><td width="140">addKeyTimeoutDur_S</td><td width="150">(int, 10)</td><td width="660">Time in seconds that the unit will await a new card when in Key Add Mode before timing out</td></tr>
 <tr><td width="140">buzzer_gh</td><td width="150">(int)</td><td width="660">GPIO Header pin to reassign the buzzer output to.</td></tr>
 <tr><td width="140">neopix_gh</td><td width="150">(int)</td><td width="660">GPIO Header pin to reassign neopixel output to. (Requires external LLC)</td></tr>
 <tr><td width="140">lockRelay_gh</td><td width="150">(int)</td><td width="660">GPIO Header pin to reassign lock relay output to.</td></tr>
