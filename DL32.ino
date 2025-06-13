@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 2025-06-11
+  Last updated 2025-06-13
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250611
+#define codeVersion 20250613
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -50,11 +50,11 @@
 #include <SD.h>                 // SD by espressif https://github.com/espressif/arduino-esp32/blob/master/libraries/SD
 #include <SimpleFTPServer.h>    // SimpleFTPServer by Renzo Mischianti https://mischianti.org/category/my-libraries/simple-ftp-server/
 #include <Update.h>             // Update by Hristo Gochkov https://github.com/espressif/arduino-esp32/tree/master/libraries/Update
-#include <WiFiClientSecure.h>   // WifiClientSecure by Evandro Luis Copercini https://git.liberatedsystems.co.uk/jacob.eva/arduino-esp32/src/commit/bcd6dcf5f6f8a4670db53a495ad8c8b556c2a8fa/libraries/WiFiClientSecure
+#include <WiFiClientSecure.h>   // WifiClientSecure by Evandro Luis Copercini https://github.com/espressif/arduino-esp32/blob/master/libraries/NetworkClientSecure/
 #include <vector>               // vector library from C++ standard library https://github.com/espressif/arduino-esp32
 #include <algorithm>            // algorithm library from C++ standard library https://github.com/espressif/arduino-esp32
 #include <HTTPClient.h>         // HTTPClient by Markus Sattler https://github.com/espressif/arduino-esp32/tree/master/libraries/HTTPClient
-#include <ESPmDNS.h>
+#include <ESPmDNS.h>            // ESPmDNS by Hristo Gochkov https://github.com/espressif/arduino-esp32/tree/master/libraries/ESPmDNS
 
 // Hardware Rev 20240812 pins [Since codeVersion 20240819]
 #define attSensor_pin 9
@@ -128,6 +128,7 @@ struct Config {
   int wiegand_1_pin;
   int pixelBrightness;
   char theme[8];
+  bool restartTone;
 };
 
 // Variables for FreeRTOS non-blocking bell task
@@ -230,13 +231,15 @@ PubSubClient mqttClient_tls(wifiClient_tls);
 
 // --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions --- Watchdog Functions ---
 
-void restart() {
+void restart(int sound) {
   Serial.println("Restarting...");
   mqttPublish(config.mqtt_stat_topic, "Restarting...");
+  if (sound && config.restartTone) {
+    playRestartMelody();
+  }
   if (client_cert) free(client_cert);
   if (client_key) free(client_key);
   if (ca_cert) free(ca_cert);
-  delay(1000);
   ESP.restart();
 }
 
@@ -921,6 +924,7 @@ bool loadFSJSON_config(const char* config_filename, Config& config) {
   config.wiegand_1_pin = returnGHpin(config_doc["wiegand_1_gh"].as<int>(), def_wiegand_1_pin);
   config.pixelBrightness = returnPixelBrightness(config_doc["pixelBrightness"] | 1);
   strlcpy(config.theme, config_doc["theme"] | "orange", sizeof(config.theme));
+  config.restartTone = config_doc["restartTone"] | true;
   config_file.close();
   return true;
 }
@@ -1027,7 +1031,7 @@ bool addressingSDtoFFat() {
     return false;
   }
   Serial.println("Addressing file successfuly copied from SD to FFat");
-  restart();
+  //restart(1);
   return true;
 }
 
@@ -1061,7 +1065,7 @@ bool allSDtoFFat() {
     playTwinkleUpTone();
     Serial.print(copiedFileCount);
     Serial.println(" files successfuly copied from SD to FFat");
-    restart();
+    restart(0);
   } else {
     playUnauthorizedTone();
     Serial.println("No SD Card Mounted or no valid files");
@@ -1400,7 +1404,6 @@ void factoryReset() {
   playTwinkleDownTone();
   Serial.println("Factory reset complete.");
   mqttPublish(config.mqtt_stat_topic, "Factory reset complete.");
-  restart();
 }
 
 // --- Button Functions --- Button Functions --- Button Functions --- Button Functions --- Button Functions --- Button Functions ---
@@ -1527,6 +1530,7 @@ void checkAUX() {
       delay(1000);
     } else if (count > 1499) {
       factoryReset();
+      restart(1);
     }
     setPixBlue();
     return;
@@ -1568,6 +1572,10 @@ void checkMagSensor() {
 }
 
 // --- Buzzer Functions --- Buzzer Functions --- Buzzer Functions --- Buzzer Functions --- Buzzer Functions --- Buzzer Functions ---
+void playRestartMelody() {
+  String restartMelody = "Restart:2:0 G#7 3 43;3 D#7 3 43;6 G#6 3 43;9 A#6 5 43;:";
+  parseAndPlaySequence(restartMelody);
+}
 
 void bellTask(void* parameter) {
   String sequence = *(String*)parameter;
@@ -1693,13 +1701,11 @@ void parseAndPlaySequence(const String& sequence) {
     }
     if (currentTick != -1 && evt.tick > currentTick) {
       int tickDelta = evt.tick - currentTick;
-      for(int i=0; i<tickMs; i++) {
-        delay(tickDelta);
-        if (checkStopBell()) {
-          Serial.println("Stopping bell");
-          mqttPublish(config.mqtt_stat_topic, "Stopping bell");
-          return;
-        }
+      delay(tickDelta * tickMs);
+      if (checkStopBell()) {
+        Serial.println("Stopping bell");
+        mqttPublish(config.mqtt_stat_topic, "Stopping bell");
+        return;
       }
     }
     if (checkStopBell()) {
@@ -2193,9 +2199,9 @@ boolean executeCommand(String command) {
   } else if (command.equals("show_version")) {
     Serial.println(codeVersion);
   } else if (command.equals("restart")) {
-    restart();
+    restart(1);
   } else if (command.equals("reboot")) {
-    restart();
+    restart(1);
   } else if (command.equals("github_ota")) {
     if (handleGithubOtaLatest()) {
       mqttPublish(config.mqtt_stat_topic, "GitHub OTA update completed successfully");
@@ -2314,7 +2320,7 @@ void outputKeys() {
 
 // Restart unit
 void restartESPHTTP() {
-  restart();
+  restart(1);
 }
 
 // Display allowed keys in webUI
@@ -2835,7 +2841,7 @@ void saveAddressingStaticHTTP() {
   File addressing_file = FFat.open(addressing_filename, FILE_WRITE);
   serializeJsonPretty(addressing_doc, addressing_file);
   addressing_file.close();
-  restart();
+  restart(1);
 }
 
 void addressingStaticSDtoFFatHTTP() {
@@ -2958,16 +2964,16 @@ void siteHeader() {
   } else if (!strcmp(config.theme, "yellow")) {
     pageContent += "      :root {--themeCol01: #ffff00; --themeCol02: #cccc00; --themeCol03: #555555;}\n";
   } else if (!strcmp(config.theme, "purple")) {
-    pageContent += "      :root {--themeCol01: #cc33ff; --themeCol02: #aa11dd; --themeCol03: #555555;}\n";
+    pageContent += "      :root {--themeCol01: #9900ff; --themeCol02: #7700dd; --themeCol03: #555555;}\n";
   } else if (!strcmp(config.theme, "red")) {
     pageContent += "      :root {--themeCol01: #ff0000; --themeCol02: #cc0000; --themeCol03: #555555;}\n";
   } else if (!strcmp(config.theme, "blue")) {
     pageContent += "      :root {--themeCol01: #0000ff; --themeCol02: #0000cc; --themeCol03: #555555;}\n";
   } else if (!strcmp(config.theme, "pink")) {
     pageContent += "      :root {--themeCol01: #ff66dd; --themeCol02: #cc33bb; --themeCol03: #555555;}\n";
-  } else if (!strcmp(config.theme, "aqua")) {
+  } else if ((!strcmp(config.theme, "aqua")) || (!strcmp(config.theme, "teal"))) {
     pageContent += "      :root {--themeCol01: #00ffff; --themeCol02: #00cccc; --themeCol03: #555555;}\n";
-  } else if (!strcmp(config.theme, "grey")) {
+  } else if ((!strcmp(config.theme, "grey")) || (!strcmp(config.theme, "gray"))) {
     pageContent += "      :root {--themeCol01: #cccccc; --themeCol02: #aaaaaa; --themeCol03: #555555;}\n";
   } else {
     pageContent += "      :root {--themeCol01: #ff3200; --themeCol02: #ef2200; --themeCol03: #555555;}\n";
@@ -3135,7 +3141,7 @@ void startWebServer() {
   webServer.on("/factoryResetHTTP", []() {
     factoryReset();
     redirectHome();
-    restart();
+    restart(1);
   });
   webServer.on(UriRegex("/setBell/([\\w\\.\\-]{1,32})"), HTTP_GET, [&]() {
     Serial.print("Setting bell tone from url ");
@@ -3167,7 +3173,7 @@ void startWebServer() {
     } else {
       webServer.send(200, "text/plain", "Update Successful. Restarting...");
       delay(100);
-      restart();
+      restart(1);
     }
   }, handleUploadOTA);
   webServer.on(UriRegex("/remKey/([0-9a-zA-Z]{3,16})"), HTTP_GET, [&]() {
@@ -3448,8 +3454,7 @@ bool handleGithubOtaLatest() {
     Serial.println("OTA update complete");
     mqttPublish(config.mqtt_stat_topic, "OTA update complete");
     https.end();
-    delay(1000);
-    restart();
+    restart(1);
     return true;
   } else {
     Serial.println("Could not determine latest github release");
@@ -3525,7 +3530,7 @@ bool handleGithubOtaVersion(String version) {
     mqttPublish(config.mqtt_stat_topic, "OTA update complete");
     https.end();
     delay(1000);
-    restart();
+    restart(1);
     return true;
   } else {
     Serial.println("Could not find requested github release");
@@ -3689,7 +3694,7 @@ void loop() {
   if (forceOffline == false) {
     if (WiFi.status() == WL_CONNECTED) {
       if (disconCount > 0) {
-        restart();
+        restart(0);
       }
       //Online Functions
       webServer.handleClient();
