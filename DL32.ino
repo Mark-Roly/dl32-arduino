@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 2025-06-13
+  Last updated 2025-07-20
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250613
+#define codeVersion 20250720
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -188,6 +188,7 @@ String pageContent = "";
 const char* config_filename = "/dl32.json";
 const char* addressing_filename = "/addressing.json";
 const char* keys_filename = "/keys.txt";
+const char* singleUseKeys_filename = "/singleUseKeys.txt";
 const char* bell_filename = "/current.bell_";
 const char* caCrt_filename = "/ca.crt";
 const char* clCrt_filename = "/client.crt";
@@ -414,6 +415,35 @@ boolean keyAuthorized(String key) {
   return false;
 }
 
+boolean keyInSingleUse(String key) {
+  boolean verboseScanOutput = false;
+  File keysFile = FFat.open(singleUseKeys_filename, "r");
+  if (!keysFile) {
+    return false;
+  }
+  Serial.println("Checking single use key list...");
+  while (keysFile.available()) {
+    String fileKey = keysFile.readStringUntil('\n');
+    fileKey.trim();  // Removes trailing \r, \n, and spaces
+    if (verboseScanOutput) {
+      Serial.print("Comparing input key [");
+      Serial.print(key);
+      Serial.print("] with file key [");
+      Serial.print(fileKey);
+      Serial.println("]");
+    }
+    if (fileKey.equals(key)) {
+      keysFile.close();
+      if (verboseScanOutput) Serial.println("Single-use key found - Removing");
+      removeSingleUseKey(key);
+      return true;
+    }
+  }
+  keysFile.close();
+  if (verboseScanOutput) Serial.println("NO MATCH");
+  return false;
+}
+
 void writeKey(String key) {
   if (keyAuthorized(key)) {
     add_mode = false;
@@ -491,6 +521,70 @@ void removeKey(String key) {
     Serial.print("Removed key ");
     Serial.print(key);
     Serial.println(" from authorized list.");
+    if (FFat.exists("/keys_old")) {
+      deleteFile(FFat, "/keys_old");
+    }
+  } else {
+    deleteFile(FFat, "/keys_temp");
+    Serial.print("Key ");
+    Serial.print(key);
+    Serial.println(" not found in authorized list.");
+  }
+}
+
+void removeSingleUseKey(String key) {
+  if (!FFat.exists(singleUseKeys_filename)) {
+    Serial.println("Key file not present. Cancelling operation.");
+    return;
+  }
+  File keysFile = FFat.open(singleUseKeys_filename, "r");
+  if (!keysFile) {
+    Serial.println("Failed to open keys file for reading.");
+    return;
+  }
+  if (FFat.exists("/keys_temp")) {
+    deleteFile(FFat, "/keys_temp");
+  }
+  File tempFile = FFat.open("/keys_temp", "w");
+  if (!tempFile) {
+    Serial.println("Failed to open temp file for writing.");
+    keysFile.close();
+    return;
+  }
+  const size_t bufferLimit = 1024; // 1KB buffer
+  String writeBuffer = "";
+  bool found = false;
+  while (keysFile.available()) {
+    String fileKey = keysFile.readStringUntil('\n');
+    fileKey.trim(); // Clean up trailing whitespace/newlines
+    if (fileKey.length() == 0) continue; // Skip empty lines
+    if (fileKey == key) {
+      found = true;
+      key = ""; // Prevent duplicates from being removed - ie: only remove one instance
+      continue; // Skip writing this key
+    }
+    writeBuffer += fileKey + "\n";
+    if (writeBuffer.length() >= bufferLimit) {
+      tempFile.print(writeBuffer); // Dump buffer to file
+      writeBuffer = ""; // Clear buffer
+    }
+  }
+  // Write any remaining buffer content
+  if (writeBuffer.length() > 0) {
+    tempFile.print(writeBuffer);
+  }
+  keysFile.close();
+  tempFile.close();
+  if (found) {
+    if (FFat.exists("/keys_old")) {
+      deleteFile(FFat, "/keys_old");
+    }
+    renameFile(FFat, singleUseKeys_filename, "/keys_old");
+    renameFile(FFat, "/keys_temp", singleUseKeys_filename);
+    playTwinkleDownTone();
+    if (FFat.exists("/keys_old")) {
+      deleteFile(FFat, "/keys_old");
+    }
   } else {
     deleteFile(FFat, "/keys_temp");
     Serial.print("Key ");
@@ -585,7 +679,43 @@ void checkKey() {
     mqttClient.publish(config.mqtt_keys_topic, scannedKey.c_str());
   }
 
-  bool match_found = keyAuthorized(scannedKey);
+  bool match_found = (keyAuthorized(scannedKey) || keyInSingleUse(scannedKey));
+
+  if ((match_found == false) and (add_mode)) {
+    writeKey(scannedKey);
+  } else if (match_found and (add_mode)) {
+    add_mode = false;
+    Serial.print("Key ");
+    Serial.print(scannedKey);
+    Serial.println(" is already authorized!");
+    mqttPublish(config.mqtt_stat_topic, "Key is already authorized!");
+    playUnauthorizedTone();
+  } else if (match_found and (add_mode == false)) {
+    Serial.print("Key ");
+    Serial.print(scannedKey);
+    Serial.println(" is authorized!");
+    mqttPublish(config.mqtt_stat_topic, "Key is authorized!");
+    unlock(config.keyUnlockDur_S);
+  } else {
+    add_mode = false;
+    Serial.print("Key ");
+    Serial.print(scannedKey);
+    Serial.println(" is unauthorized!");
+    mqttPublish(config.mqtt_stat_topic, "Key is unauthorized!");
+    setPixRed();
+    playUnauthorizedTone();
+    delay(config.badKeyLockoutDur_S*1000);
+    setPixBlue();
+  }
+  scannedKey = "";
+  return;
+}
+
+// Testing function to simulate key 8888 being scanned
+void simulate_suKey() {
+  scannedKey = "8888";
+
+  bool match_found = (keyAuthorized(scannedKey) || keyInSingleUse(scannedKey));
 
   if ((match_found == false) and (add_mode)) {
     writeKey(scannedKey);
@@ -790,7 +920,7 @@ bool appendlnFile(fs::FS & fs, const char * path, const char * message){
 bool renameFile(fs::FS & fs, const char * path1, const char * path2){
   //Serial.printf("Renaming file %s to %s... ", path1, path2);
   if (fs.rename(path1, path2)) {
-    Serial.println("file renamed");
+    //Serial.println("file renamed");
   } else {
     Serial.println("rename failed");
     return false;
@@ -801,8 +931,8 @@ bool renameFile(fs::FS & fs, const char * path1, const char * path2){
 bool deleteFile(fs::FS & fs, const char * path) {
   //Serial.printf("Deleting file: %s...", path);
   if (fs.remove(path)) {
-    Serial.print("Deleted file ");
-    Serial.println(path);
+    //Serial.print("Deleted file ");
+    //Serial.println(path);
   } else {
     Serial.print("Failed to delete file ");
     Serial.println(path);
@@ -949,26 +1079,51 @@ bool loadFSJSON_addressing(const char* addressing_filename, Addressing& addressi
     Serial.print("FAILED: '");
       switch (error.code()) {
     case DeserializationError::Ok:
-        Serial.println("Deserialization succeeded");
+        Serial.print("Deserialization succeeded");
         break;
     case DeserializationError::InvalidInput:
-        Serial.println("Invalid input!");
+        Serial.print("Invalid input!");
         break;
     case DeserializationError::NoMemory:
-        Serial.println("Not enough memory");
+        Serial.print("Not enough memory");
         break;
     default:
-        Serial.println("Deserialization failed");
+        Serial.print("Deserialization failed");
         break;
     }
     Serial.println("' - Using dynamic addressing");
     return false;
   }
-  strlcpy(addressing.localIP, addressing_doc["localIP"] | "false", sizeof(addressing.localIP));
-  strlcpy(addressing.subnetMask, addressing_doc["subnetMask"] | "null_wifi_ssid", sizeof(addressing.subnetMask));
-  strlcpy(addressing.gatewayIP, addressing_doc["gatewayIP"] | "null_wifi_pass", sizeof(addressing.gatewayIP));
-  addressing_file.close();
   staticIP = true;
+
+  if (isValidIPv4(addressing_doc["localIP"])) {
+    strlcpy(addressing.localIP, addressing_doc["localIP"] | "0.0.0.0", sizeof(addressing.localIP));
+  } else {
+    staticIP = false;
+    return false;
+  }
+
+  if (isValidIPv4(addressing_doc["subnetMask"])) {
+    strlcpy(addressing.subnetMask, addressing_doc["subnetMask"] | "0.0.0.0", sizeof(addressing.subnetMask));
+  } else {
+    staticIP = false;
+    return false;
+  }
+
+  if (isValidIPv4(addressing_doc["gatewayIP"])) {
+    strlcpy(addressing.gatewayIP, addressing_doc["gatewayIP"] | "0.0.0.0", sizeof(addressing.gatewayIP));
+  } else {
+    staticIP = false;
+    return false;
+  }
+
+  addressing_file.close();
+  if (staticIP == false) {
+    Serial.print("invalid syntax in ");
+    Serial.print(addressing_filename);
+    Serial.println("' - Using dynamic addressing");
+    return false;
+  }
   Serial.println("static addressing loaded");
   return true;
 }
@@ -1215,32 +1370,29 @@ void setPixBlue() {
 
 // --- Wifi Functions --- Wifi Functions --- Wifi Functions --- Wifi Functions --- Wifi Functions --- Wifi Functions --- Wifi Functions ---
 
-// Function to convert sgtring-format IP address into ip address object
+// Function to convert string-format IP address into ip address object
 IPAddress stringToIPAddress(const char* ipStr) {
-    // Split the input string by periods '.'
-    uint8_t bytes[4];
-    int byteIndex = 0;
-    // Convert each part of the string to a byte
-    char* token = strtok((char*)ipStr, ".");
-    while (token != NULL && byteIndex < 4) {
-        bytes[byteIndex] = atoi(token);
-        token = strtok(NULL, ".");
-        byteIndex++;
-    }
-    // Return the IPAddress object
-    return IPAddress(bytes[0], bytes[1], bytes[2], bytes[3]);
+  uint8_t bytes[4];
+  char temp[16];
+  strncpy(temp, ipStr, sizeof(temp));
+  temp[sizeof(temp)-1] = '\0';
+
+  char* token = strtok(temp, ".");
+  int byteIndex = 0;
+  while (token != NULL && byteIndex < 4) {
+    bytes[byteIndex++] = atoi(token);
+    token = strtok(NULL, ".");
+  }
+  return IPAddress(bytes[0], bytes[1], bytes[2], bytes[3]);
 }
 
 int connectWifi() {
   // Configures static IP address
-  if (staticIP == true) {
-    if (!WiFi.config(stringToIPAddress(addressing.localIP), stringToIPAddress(addressing.gatewayIP), stringToIPAddress(addressing.subnetMask))) {
-      Serial.println("STA Failed to configure");
-      (staticIP == false);
-    }
-  }
-  WiFi.disconnect(true); // Erase WiFi config
-  delay(100);
+  
+  
+
+  WiFi.disconnect(true); // Clear any DHCP lease
+  delay(1000);
   WiFi.mode(WIFI_MODE_STA);
   WiFi.setHostname(config.mqtt_client_name);
   Serial.print("Connecting to SSID " + (String)config.wifi_ssid);
@@ -1261,8 +1413,21 @@ int connectWifi() {
       return 1;
     }
   }
+  delay(1000); // Let it settle
   Serial.print("\nSuccessfully connected to SSID ");
   Serial.println(config.wifi_ssid);
+  if (staticIP) {
+    if (!WiFi.config(
+          stringToIPAddress(addressing.localIP),
+          stringToIPAddress(addressing.gatewayIP),
+          stringToIPAddress(addressing.gatewayIP),
+          stringToIPAddress(addressing.subnetMask))) {
+      Serial.println("STA Failed to configure");
+      staticIP = false;
+    } else {
+      Serial.println("Static IP configuration successful");
+    }
+  }
   Serial.println("WiFi hostname: " + String(WiFi.getHostname()));
   MDNS.begin(config.mqtt_client_name);
   if (config.mqtt_enabled) {
@@ -1645,6 +1810,9 @@ bool compareNoteEvents(const NoteEvent& a, const NoteEvent& b) {
 
 // Function to translate sequence file to playNote() instances
 void parseAndPlaySequence(const String& sequence) {
+  if (digitalRead(DS03) == LOW) {
+    return;
+  }
   int firstColon = sequence.indexOf(':');
   int secondColon = sequence.indexOf(':', firstColon + 1);
   if (secondColon == -1) return;
@@ -2819,8 +2987,20 @@ void ringBellHTTP() {
   ringBell();
 }
 
-int parseSDAddressingFile () {
-  //TODO
+void printIPAddressingDetails() {
+  Serial.print("WiFi.localIP(): ");
+  Serial.println(WiFi.localIP());
+  Serial.print("WiFi.subnetMask(): ");
+  Serial.println(WiFi.subnetMask());
+  Serial.print("WiFi.gatewayIP(): ");
+  Serial.println(WiFi.gatewayIP());
+  Serial.print("WiFi.dnsIP(): ");
+  Serial.println(WiFi.dnsIP());
+}
+
+bool isValidIPv4(const char* ipStr) {
+  IPAddress ip;
+  return ip.fromString(ipStr);
 }
 
 void saveAddressingStaticHTTP() {
@@ -2958,7 +3138,7 @@ void siteHeader() {
   pageContent = html_head;
   pageContent += "    <style>\n";
   if (!strcmp(config.theme, "orange")) {
-    pageContent += "      :root {--themeCol01: #ff3200; --themeCol02: #ef2200; --themeCol03: #555555;}\n";
+    pageContent += "      :root {--themeCol01: #fC8800; --themeCol02: #da6600; --themeCol03: #555555;}\n";
   } else if (!strcmp(config.theme, "green")) {
     pageContent += "      :root {--themeCol01: #00ff00; --themeCol02: #00cc00; --themeCol03: #555555;}\n";
   } else if (!strcmp(config.theme, "yellow")) {
@@ -2968,15 +3148,46 @@ void siteHeader() {
   } else if (!strcmp(config.theme, "red")) {
     pageContent += "      :root {--themeCol01: #ff0000; --themeCol02: #cc0000; --themeCol03: #555555;}\n";
   } else if (!strcmp(config.theme, "blue")) {
-    pageContent += "      :root {--themeCol01: #0000ff; --themeCol02: #0000cc; --themeCol03: #555555;}\n";
+    pageContent += "      :root {--themeCol01: #7777ff; --themeCol02: #5555cc; --themeCol03: #555555;}\n";
   } else if (!strcmp(config.theme, "pink")) {
     pageContent += "      :root {--themeCol01: #ff66dd; --themeCol02: #cc33bb; --themeCol03: #555555;}\n";
   } else if ((!strcmp(config.theme, "aqua")) || (!strcmp(config.theme, "teal"))) {
     pageContent += "      :root {--themeCol01: #00ffff; --themeCol02: #00cccc; --themeCol03: #555555;}\n";
   } else if ((!strcmp(config.theme, "grey")) || (!strcmp(config.theme, "gray"))) {
     pageContent += "      :root {--themeCol01: #cccccc; --themeCol02: #aaaaaa; --themeCol03: #555555;}\n";
+  } else if (!strcmp(config.theme, "rainbow")) {
+    int randomTheme = random(0, 10);
+    switch (randomTheme) {
+      case 1:
+        pageContent += "      :root {--themeCol01: #fC8800; --themeCol02: #da6600; --themeCol03: #555555;}\n";
+        break;
+      case 2:
+        pageContent += "      :root {--themeCol01: #00ff00; --themeCol02: #00cc00; --themeCol03: #555555;}\n";
+        break;
+      case 3:
+        pageContent += "      :root {--themeCol01: #ffff00; --themeCol02: #cccc00; --themeCol03: #555555;}\n";
+        break;
+      case 4:
+        pageContent += "      :root {--themeCol01: #9900ff; --themeCol02: #7700dd; --themeCol03: #555555;}\n";
+        break;
+      case 5:
+        pageContent += "      :root {--themeCol01: #ff0000; --themeCol02: #cc0000; --themeCol03: #555555;}\n";
+        break;
+      case 6:
+        pageContent += "      :root {--themeCol01: #7777ff; --themeCol02: #5555cc; --themeCol03: #555555;}\n";
+        break;
+      case 7:
+        pageContent += "      :root {--themeCol01: #ff66dd; --themeCol02: #cc33bb; --themeCol03: #555555;}\n";
+        break;
+      case 8:
+        pageContent += "      :root {--themeCol01: #00ffff; --themeCol02: #00cccc; --themeCol03: #555555;}\n";
+        break;
+      default:
+        pageContent += "      :root {--themeCol01: #cccccc; --themeCol02: #aaaaaa; --themeCol03: #555555;}\n";
+        break;
+    }
   } else {
-    pageContent += "      :root {--themeCol01: #ff3200; --themeCol02: #ef2200; --themeCol03: #555555;}\n";
+    pageContent += "      :root {--themeCol01: #fC8800; --themeCol02: #da6600; --themeCol03: #555555;}\n";
   }
   pageContent += "    </style>";
   pageContent += html_style;
@@ -3407,8 +3618,8 @@ bool handleGithubOtaLatest() {
     String url = "https://github.com/" + String(otaGithubAccount) + "/" + String(otaGithubRepo) + "/releases/download/" + otaLatestGithubVersion + "/" + String(otaGithubBinary);
     mqttPublish(config.mqtt_stat_topic, "Performing OTA update from GitHub");
     Serial.println("Performing OTA update from GitHub");
-    Serial.println("Starting OTA update...");
     Serial.println("Download URL: " + url);
+    Serial.println("Starting OTA update, do not power-off device...");
     HTTPClient https;
     if (!https.begin(client, url)) {
       Serial.println("Failed to begin HTTPS connection");
@@ -3482,8 +3693,8 @@ bool handleGithubOtaVersion(String version) {
     String url = "https://github.com/" + String(otaGithubAccount) + "/" + String(otaGithubRepo) + "/releases/download/" + version + "/" + String(otaGithubBinary);
     mqttPublish(config.mqtt_stat_topic, "Performing OTA update from GitHub");
     Serial.println("Performing OTA update from GitHub");
-    Serial.println("Starting OTA update...");
     Serial.println("Download URL: " + url);
+    Serial.println("Starting OTA update, do not power-off device...");
     HTTPClient https;
     if (!https.begin(client, url)) {
       Serial.println("Failed to begin HTTPS connection");
@@ -3634,6 +3845,7 @@ void setup() {
   }
   if (forceOffline == false) {
     connectWifi();
+    //printIPAddressingDetails();
     startWebServer();
     ftpSrv.setCallback(_callback);
     ftpSrv.setTransferCallback(_transferCallback);
