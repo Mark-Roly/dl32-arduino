@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 2025-07-20
+  Last updated 2025-08-01
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250720
+#define codeVersion 20250801
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -199,6 +199,9 @@ const char* otaGithubAccount = "Mark-Roly";
 const char* otaGithubRepo = "dl32-arduino";
 const char* otaGithubBinary = "DL32.bin";
 String otaLatestGithubVersion = "";
+
+// Built-in melodies
+String defaultBell = "Default Tone:1:0 C#4 1 43;1 D4 1 43;2 D#4 1 43;3 E4 1 43;4 C#4 1 43;5 D4 1 43;6 D#4 1 43;7 E4 1 43;8 C#4 1 43;9 D4 1 43;10 D#4 1 43;11 E4 1 43;12 C#4 1 43;13 D4 1 43;14 D#4 1 43;15 E4 1 43;:";
 
 // TLS buffer pointers
 char* ca_cert = nullptr;
@@ -611,6 +614,19 @@ void previewFile(String file) {
   webServer.send(404, "text/plain", "File not found");
 }
 
+// Function for simulated key input
+void simulateKey(String key) {
+  if (key.length() < 3 || key.length() > 10) {
+    Serial.println("Simulated key must be 3–10 characters.");
+    return;
+  }
+  scannedKey = key;
+  scannedKey.toUpperCase();
+  Serial.print("Simulating key scan: ");
+  Serial.println(scannedKey);
+  checkKey();  // This triggers the same logic as real scans
+}
+
 // Polled function to check if a key has been recently read
 void checkKey() {
   noInterrupts();
@@ -678,42 +694,6 @@ void checkKey() {
   } else if (mqttConnected()) {
     mqttClient.publish(config.mqtt_keys_topic, scannedKey.c_str());
   }
-
-  bool match_found = (keyAuthorized(scannedKey) || keyInSingleUse(scannedKey));
-
-  if ((match_found == false) and (add_mode)) {
-    writeKey(scannedKey);
-  } else if (match_found and (add_mode)) {
-    add_mode = false;
-    Serial.print("Key ");
-    Serial.print(scannedKey);
-    Serial.println(" is already authorized!");
-    mqttPublish(config.mqtt_stat_topic, "Key is already authorized!");
-    playUnauthorizedTone();
-  } else if (match_found and (add_mode == false)) {
-    Serial.print("Key ");
-    Serial.print(scannedKey);
-    Serial.println(" is authorized!");
-    mqttPublish(config.mqtt_stat_topic, "Key is authorized!");
-    unlock(config.keyUnlockDur_S);
-  } else {
-    add_mode = false;
-    Serial.print("Key ");
-    Serial.print(scannedKey);
-    Serial.println(" is unauthorized!");
-    mqttPublish(config.mqtt_stat_topic, "Key is unauthorized!");
-    setPixRed();
-    playUnauthorizedTone();
-    delay(config.badKeyLockoutDur_S*1000);
-    setPixBlue();
-  }
-  scannedKey = "";
-  return;
-}
-
-// Testing function to simulate key 8888 being scanned
-void simulate_suKey() {
-  scannedKey = "8888";
 
   bool match_found = (keyAuthorized(scannedKey) || keyInSingleUse(scannedKey));
 
@@ -1755,7 +1735,7 @@ void loadBellFile() {
   bellFile = "";
   if (!file) {
     Serial.println("Using default");
-    bellFile = "Default Tone:1:0 C#4 1 43;1 D4 1 43;2 D#4 1 43;3 E4 1 43;4 C#4 1 43;5 D4 1 43;6 D#4 1 43;7 E4 1 43;8 C#4 1 43;9 D4 1 43;10 D#4 1 43;11 E4 1 43;12 C#4 1 43;13 D4 1 43;14 D#4 1 43;15 E4 1 43;:";
+    bellFile = defaultBell;
     return;
   }
   while (file.available()) {
@@ -1998,14 +1978,31 @@ void playBellFile(String filename) {
   String tempBellFile = "";
   if (!file) {
     Serial.println("FAILED: Using default");
-    bellFile = "Default Tone:1:0 C#4 1 43;:";
+    bellFile = defaultBell;
     return;
   }
   while (file.available()) {
     tempBellFile += (char)file.read();
   }
   file.close();
-  parseAndPlaySequence(tempBellFile);
+  //parseAndPlaySequence(tempBellFile);
+  if (bellTaskHandle == nullptr) {
+    Serial.println("Ringing bell");
+    mqttPublish(config.mqtt_stat_topic, "Ringing bell");
+
+    String* taskSequence = new String(tempBellFile);  // Allocate on heap
+    xTaskCreatePinnedToCore(
+      bellTask,          // Task function
+      "bellTask",        // Name
+      4096,              // Stack size
+      taskSequence,      // Param
+      1,                 // Priority (low)
+      &bellTaskHandle,   // Handle
+      1                  // Core (1 to stay off WiFi core)
+    );
+  } else {
+    Serial.println("Bell is already playing.");
+  }
 }
 
 void ringBell() {
@@ -2319,15 +2316,15 @@ void checkSerialCmd() {
 }
 
 boolean executeCommand(String command) {
-  if (command.equals("list_commands")) {
+  if (command.equals("list-commands")) {
     listCmnds();
-  } else if (command.equals("list_ffat")) {
+  } else if (command.equals("list-ffat")) {
     listDir(FFat, "/", 0);
-  } else if (command.equals("list_sd")) {
+  } else if (command.equals("list-sd")) {
     listDir(SD, "/", 0);
-  } else if (command.equals("list_keys")) {
+  } else if (command.equals("list-keys")) {
     outputKeys();
-  } else if (command.equals("purge_addressing")) {
+  } else if (command.equals("purge-addressing")) {
     if (deleteFile(FFat, addressing_filename)) {
       playTwinkleDownTone();
     } else {
@@ -2335,7 +2332,7 @@ boolean executeCommand(String command) {
     }
     Serial.println("Static addressing purged");
     mqttPublish(config.mqtt_stat_topic, "Static addressing purged");
-  } else if (command.equals("purge_keys")) {
+  } else if (command.equals("purge-keys")) {
     if (deleteFile(FFat, keys_filename)) {
       playTwinkleDownTone();
     } else {
@@ -2343,34 +2340,34 @@ boolean executeCommand(String command) {
     }
     Serial.println("All authorized keys purged");
     mqttPublish(config.mqtt_stat_topic, "All authorized keys purged");
-  } else if (command.equals("purge_config")) {
+  } else if (command.equals("purge-config")) {
     if (deleteFile(FFat, config_filename)) {
       playTwinkleDownTone();
     } else {
       playUnauthorizedTone();
     }
     Serial.println("Static addressing purged");
-  } else if (command.equals("add_key_mode")) {
+  } else if (command.equals("add-key-mode")) {
     addKeyMode();
-  } else if (command.equals("ring_bell")) {
+  } else if (command.equals("ring-bell")) {
     ringBell();
   } else if (command.equals("stats")) {
     printStats();
     publishStats();
     publishStorage();
-  } else if (command.equals("copy_keys_sd_to_ffat")) {
+  } else if (command.equals("copy-keys-sd-to-ffat")) {
     keysSDtoFFat();
-  } else if (command.equals("copy_config_sd_to_ffat")) {
+  } else if (command.equals("copy-config-sd-to-ffat")) {
     configSDtoFFat();
-  } else if (command.equals("show_config")) {
+  } else if (command.equals("show-config")) {
     readFile(FFat, config_filename);
-  } else if (command.equals("show_version")) {
+  } else if (command.equals("show-version")) {
     Serial.println(codeVersion);
   } else if (command.equals("restart")) {
     restart(1);
   } else if (command.equals("reboot")) {
     restart(1);
-  } else if (command.equals("github_ota")) {
+  } else if (command.equals("github-ota")) {
     if (handleGithubOtaLatest()) {
       mqttPublish(config.mqtt_stat_topic, "GitHub OTA update completed successfully");
     } else {
@@ -2378,18 +2375,24 @@ boolean executeCommand(String command) {
     }
   } else if (command.equals("unlock")) {
     unlock(config.cmndUnlockDur_S);
-  } else if ((command.equals("garage_toggle")&& garage_mode)) {
+  } else if ((command.equals("garage-toggle")&& garage_mode)) {
     Serial.println("Toggling garage door");
     mqttPublish(config.mqtt_stat_topic, "Toggling garage door");
     garage_toggle();
-  } else if ((command.equals("garage_open")&& garage_mode)) {
+  } else if ((command.equals("garage-open")&& garage_mode)) {
     Serial.println("Toggling garage door");
     mqttPublish(config.mqtt_stat_topic, "Opening garage door");
     garage_open();
-  } else if ((command.equals("garage_close")&& garage_mode)) {
+  } else if ((command.equals("garage-close")&& garage_mode)) {
     Serial.println("Closing garage door");
     mqttPublish(config.mqtt_stat_topic, "Closing garage door");
     garage_close();
+  } else if (command.startsWith("simulate-key ")) {
+    String simulatedKey = serialCmd.substring(String("simulate_key ").length());
+    Serial.print("Simulating key: ");
+    Serial.println(simulatedKey);
+    mqttPublish(config.mqtt_stat_topic, ("Simulating key: " + simulatedKey).c_str());
+    simulateKey(simulatedKey);
   } else {
     Serial.println("bad command");
     return false;
@@ -2399,9 +2402,9 @@ boolean executeCommand(String command) {
 
 void listCmnds() {
   if (mqttConnected()) {
-    mqttPublish(config.mqtt_stat_topic, "add_key_mode\ncopy_config_sd_to_ffat\ncopy_keys_sd_to_ffat\ngarage_close\ngarage_open\ngarage_toggle\nlist_commands\nlist_ffat\nlist_keys\nlist_sd\npurge_addressing\npurge_config\npurge_keys\nrestart\nring_bell\nshow_config\nshow_version\nstats\nunlock");
+    mqttPublish(config.mqtt_stat_topic, "add-key-mode\ncopy-config-sd-to-ffat\ncopy-keys-sd-to-ffat\ngarage-close\ngarage-open\ngarage-toggle\nlist-commands\nlist-ffat\nlist-keys\nlist-sd\npurge-addressing\npurge-config\npurge-keys\nrestart\nring-bell\nshow-config\nshow-version\nstats\nunlock");
   }
-  Serial.printf("add_key_mode\ncopy_config_sd_to_ffat\ncopy_keys_sd_to_ffat\ngarage_close\ngarage_open\ngarage_toggle\nlist_commands\nlist_ffat\nlist_keys\nlist_sd\npurge_addressing\npurge_config\npurge_keys\nrestart\nring_bell\nshow_config\nshow_version\nstats\nunlock");
+  Serial.printf("add-key-mode\ncopy-config-sd-to-ffat\ncopy-keys-sd-to-ffat\ngarage-close\ngarage-open\ngarage-toggle\nlist-commands\nlist-ffat\nlist-keys\nlist-sd\npurge-addressing\npurge-config\npurge-keys\nrestart\nring-bell\nshow-config\nshow-version\nstats\nunlock");
 }
 
 // --- FTP Functions --- FTP Functions --- FTP Functions --- FTP Functions --- FTP Functions --- FTP Functions ---
@@ -2493,7 +2496,6 @@ void restartESPHTTP() {
 
 // Display allowed keys in webUI
 void displayKeys() {
-  //pageContent += "      <br/>\n";
   pageContent += "      <table class='keyTable'>\n";
   char buffer[64];
   int count = 0;
@@ -2712,6 +2714,19 @@ const char* factoryResetScript = R"rawliteral(
       </script>
 )rawliteral";
 
+const char* importTarSuccessScript = R"rawliteral(
+      <script>
+        window.addEventListener("DOMContentLoaded", () => {
+          const urlParams = new URLSearchParams(window.location.search);
+          if (urlParams.get("import") === "success") {
+            alert("Backup restored successfully!");
+            // Remove query string without reloading
+            window.history.replaceState({}, document.title, "/");
+          }
+        });
+      </script>
+)rawliteral";
+
 const char* otaUpdateForm = R"rawliteral(
       <a class="header">Firmware Update</a>
       <br/>
@@ -2732,6 +2747,7 @@ void jsScripts() {
   pageContent += purgeKeysScript;
   pageContent += factoryResetScript;
   pageContent += purgeConfigScript;
+  pageContent += importTarSuccessScript; 
 }
 
 void updateControls() {
@@ -2982,6 +2998,138 @@ int FFat_file_download(String filename) {
   return 1;
 }
 
+File createTarball() {
+  const char* tarPath = "/backup.tar";
+  File tarFile = FFat.open(tarPath, FILE_WRITE);
+  if (!tarFile) {
+    Serial.println("Failed to create tar file");
+    return File();
+  }
+
+  File root = FFat.open("/");
+  File entry = root.openNextFile();
+
+  while (entry) {
+    String entryName = String(entry.name());
+    if (entryName.startsWith("/")) entryName = entryName.substring(1);
+    if (entryName == "backup.tar") {
+      entry = root.openNextFile();
+      continue;
+    }
+    if (!entry.isDirectory()) {
+      // Write 512-byte tar header
+      char header[512] = {0};
+      String name = entry.name();
+      if (name.startsWith("/")) name = name.substring(1);
+
+      snprintf(header, 100, "%s", name.c_str());
+      snprintf(header + 100, 8, "%07o", 0644);                         // File mode
+      snprintf(header + 108, 8, "%07o", 0);                            // Owner UID
+      snprintf(header + 116, 8, "%07o", 0);                            // Owner GID
+      snprintf(header + 124, 12, "%011o", (unsigned)entry.size());    // File size
+      snprintf(header + 136, 12, "%011o", (unsigned)time(nullptr));   // Modification time
+      header[156] = '0';                                              // Type flag (normal file)
+
+      // Compute and insert checksum
+      memset(header + 148, ' ', 8);
+      unsigned int checksum = 0;
+      for (int i = 0; i < 512; i++) checksum += (uint8_t)header[i];
+      snprintf(header + 148, 8, "%06o", checksum);
+      header[154] = '\0'; // null-terminated
+      header[155] = ' ';
+
+      // Write header
+      tarFile.write((uint8_t*)header, 512);
+
+      // Write file data
+      while (entry.available()) {
+        uint8_t buf[512] = {0};
+        size_t len = entry.read(buf, 512);
+        tarFile.write(buf, len);
+        if (len < 512) {
+          // Pad final block
+          uint8_t pad[512] = {0};
+          tarFile.write(pad, 512 - len);
+        }
+      }
+    }
+    entry = root.openNextFile();
+  }
+
+  // 2 empty blocks indicate end of tar
+  uint8_t emptyBlock[512] = {0};
+  tarFile.write(emptyBlock, 512);
+  tarFile.write(emptyBlock, 512);
+
+  tarFile.close();
+  return FFat.open(tarPath, FILE_READ);
+}
+
+bool importTarball(File tarFile) {
+  if (!tarFile || !tarFile.available()) {
+    Serial.println("Invalid TAR file");
+    return false;
+  }
+
+  while (tarFile.available()) {
+    char header[512];
+    size_t bytesRead = tarFile.readBytes(header, 512);
+    if (bytesRead != 512) break;
+
+    // End of archive
+    bool emptyBlock = true;
+    for (int i = 0; i < 512; i++) {
+      if (header[i] != 0) {
+        emptyBlock = false;
+        break;
+      }
+    }
+    if (emptyBlock) break;
+
+    // Extract filename
+    char filename[101] = {0};
+    strncpy(filename, header, 100);
+
+    // Extract file size (octal)
+    char sizeStr[13] = {0};
+    strncpy(sizeStr, header + 124, 12);
+    unsigned long fileSize = strtoul(sizeStr, nullptr, 8);
+
+    // Debug
+    Serial.printf("Restoring file: %s (%lu bytes)\n", filename, fileSize);
+
+    // Open file for writing (overwrite)
+    String path = "/";
+    path += filename;
+    File outFile = FFat.open(path, FILE_WRITE);
+    if (!outFile) {
+      Serial.printf("Failed to open %s for writing\n", path.c_str());
+      return false;
+    }
+
+    // Read file data
+    size_t remaining = fileSize;
+    while (remaining > 0) {
+      uint8_t buf[512];
+      size_t toRead = min(remaining, sizeof(buf));
+      size_t readNow = tarFile.read(buf, toRead);
+      outFile.write(buf, readNow);
+      remaining -= readNow;
+    }
+
+    outFile.close();
+
+    // Skip padding
+    if (fileSize % 512 != 0) {
+      size_t skip = 512 - (fileSize % 512);
+      tarFile.seek(tarFile.position() + skip);
+    }
+  }
+
+  Serial.println("TAR import complete");
+  return true;
+}
+
 void ringBellHTTP() {
   redirectHome();
   ringBell();
@@ -3101,10 +3249,10 @@ const char* html_style = R"rawliteral(
       .fileMgCell {height: 15px; width: 45px; background-color: var(--themeCol01); color: black; border: 1px solid #000000}
       .fileMgCell:hover {height: 15px; width: 45px; background-color: var(--themeCol02); color: black; border: 1px solid #000000}
       .fileMgLink {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; text-decoration: none;}
-      .fileMgInputFile {height: 18px; width: 235px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .fileMgInputFile:hover {height: 18px; width: 235px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
-      .fileMgInputButton {height: 18px; width: 60px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .fileMgInputButton:hover {height: 18px; width: 60px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .fileMgInputFile {height: 18px; width: 215px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .fileMgInputFile:hover {height: 18px; width: 215px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .fileMgInputButton {height: 18px; width: 80px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .fileMgInputButton:hover {height: 18px; width: 80px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
       .firmwareInputFile {height: 18px; margin-top: 5px; width: 235px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
       .firmwareInputFile:hover {height: 18px; margin-top: 5px; width: 235px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
       .firmwareInputButton {height: 18px; margin-top: 5px; width: 60px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
@@ -3253,6 +3401,14 @@ void siteButtons() {
   pageContent += "      <br/>\n";
   pageContent += "      <button onclick='confirmAndPurgeConfig()'>Purge configuration</button>\n";
   pageContent += "      <br/>\n";
+  pageContent += "      <a href='/downloadFFatTar'><button>Download Full FS Backup</button></a>\n";
+  pageContent += "      <br/>\n";
+  pageContent += "     <form method='POST' action='/uploadTar' enctype='multipart/form-data'>\n";
+  pageContent += "       <div class='inputRow'>\n";
+  pageContent += "         <input type='file' name='file' class='fileMgInputFile' required>\n";
+  pageContent += "         <input type='submit' class='fileMgInputButton' value='IMPORT TAR'>\n";
+  pageContent += "       </div>\n";
+  pageContent += "      </form>\n";
   pageContent += "      <button onclick='confirmAndFactoryReset()'>[ ! ] Factory reset [ ! ]</button>\n";
   pageContent += "      <br/><br/>\n";
   pageContent += "      <a class='header'>IP Addressing</a>\n";
@@ -3292,24 +3448,29 @@ void siteButtons() {
 
 void siteFooter() {
   IPAddress ip_addr = WiFi.localIP();
+  pageContent += "[ ";
   pageContent += "      <a class='smalltext'>";
-  pageContent += "[ IP: ";
+  pageContent += "IP: ";
   pageContent += (String(ip_addr[0]) + "." + String(ip_addr[1]) + "." + String(ip_addr[2]) + "." + String(ip_addr[3]));
   if (staticIP) {
     pageContent += "<sup>(S)</sup>";
   } else {
     pageContent += "<sup>(D)</sup>";
   }
-  pageContent += " ]</a>";
+  pageContent += "</a> ]";
   pageContent += "&nbsp;&nbsp;&nbsp;";
+  pageContent += "[ ";
   pageContent += "<a class='smalltext'>";
-  pageContent += "[ ver: ";
+  pageContent += "ver: ";
   pageContent += (String(codeVersion));
-  pageContent += " ]&nbsp;&nbsp;&nbsp;";
   pageContent += "</a>";
+  pageContent += " ]&nbsp;&nbsp;&nbsp;";
+  pageContent += "[ ";
   pageContent += "<a class='smalltext' href='https://github.com/Mark-Roly/dl32-arduino' target='_blank' rel='noopener noreferrer'>";
-  pageContent += "[ GitHub Link ]";
-  pageContent += "</a>\n";
+  pageContent += "GitHub Link";
+  pageContent += "</a>";
+  pageContent += " ]";
+  pageContent += "\n";
   pageContent += "      <br/><br/>\n";
   pageContent += "    </div>\n";
   pageContent += "  </body>\n";
@@ -3346,6 +3507,42 @@ void startWebServer() {
   webServer.on("/addressingStaticSDtoFFatHTTP", addressingStaticSDtoFFatHTTP);
   webServer.on("/purgeAddressingStaticHTTP", purgeAddressingStaticHTTP);
   webServer.on("/githubOtaLatestHTTP", githubOtaLatestHTTP);
+  webServer.on("/downloadFFatTar", HTTP_GET, []() {
+    File tar = createTarball();
+    if (!tar) {
+      webServer.send(500, "text/plain", "Failed to create tar archive");
+      return;
+    }
+    webServer.sendHeader("Content-Type", "application/x-tar");
+    webServer.sendHeader("Content-Disposition", "attachment; filename=\"ffat_backup.tar\"");
+    webServer.sendHeader("Connection", "close");
+    webServer.streamFile(tar, "application/x-tar");
+    tar.close();
+  });
+  webServer.on("/uploadTar", HTTP_POST, []() {
+    webServer.sendHeader("Location", "/?import=success", true);
+    webServer.send(302, "text/plain", "");  
+  }, []() {
+    HTTPUpload& upload = webServer.upload();
+    static File tarUpload;
+
+    if (upload.status == UPLOAD_FILE_START) {
+      Serial.println("TAR upload started");
+      tarUpload = FFat.open("/incoming.tar", FILE_WRITE);
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      if (tarUpload) tarUpload.write(upload.buf, upload.currentSize);
+    } else if (upload.status == UPLOAD_FILE_END) {
+      if (tarUpload) tarUpload.close();
+      File f = FFat.open("/incoming.tar");
+      if (!importTarball(f)) {
+        Serial.println("TAR import failed");
+      } else {
+        Serial.println("TAR import succeeded");
+        deleteFile(FFat, "/incoming.tar");
+      }
+      f.close();
+    }
+  });
   webServer.on(UriRegex("/githubOtaVersionHTTP/([0-9]{8})"), HTTP_GET, [&]() {
     githubOtaVersionHTTP();
   });
