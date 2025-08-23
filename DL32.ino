@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 2025-08-12
+  Last updated 2025-08-23
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,7 @@
 
 */
 
-#define codeVersion 20250812
+#define codeVersion 20250823
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -491,7 +491,7 @@ boolean keyInSingleUse(String key) {
   if (!keysFile) {
     return false;
   }
-  textOutput("Checking single use key list...");
+  //textOutput("Checking single use key list...");
   while (keysFile.available()) {
     String fileKey = keysFile.readStringUntil('\n');
     fileKey.trim();  // Removes trailing \r, \n, and spaces
@@ -1233,6 +1233,139 @@ bool loadFSJSON_addressing(const char* addressing_filename, Addressing& addressi
     return false;
   }
   textOutput(("static addressing loaded from " + String(addressing_filename)).c_str());
+  return true;
+}
+
+
+bool updateJsonVal(const char* filename, const char* jsonKey, const char* jsonVal) {
+  if (!filename || !jsonKey || !jsonVal) {
+    textOutput("updateJsonVal(): invalid args");
+    return false;
+  }
+
+  // 1) Load existing JSON (if present)
+  JsonDocument doc;  // ArduinoJson v7 dynamic doc (grows as needed)
+  bool hadExisting = FFat.exists(filename);
+  if (hadExisting) {
+    File in = FFat.open(filename, FILE_READ);
+    if (!in) {
+      textOutput("updateJsonVal(): open existing file failed");
+      return false;
+    }
+    DeserializationError err = deserializeJson(doc, in);
+    in.close();
+    if (err) {
+      // If the existing file is malformed, start fresh rather than failing.
+      textOutput("updateJsonVal(): JSON parse failed, recreating file");
+      doc.clear();
+    }
+  } else {
+    // No file yet — start a fresh object
+    doc.to<JsonObject>();
+  }
+
+  // 2) Coerce jsonVal into a sensible JSON type
+  auto isNumber = [](const char* s) -> bool {
+    if (!*s) return false;
+    // allow leading +/-; digits; optional dot; optional exponent
+    bool seenDigit = false, seenDot = false, seenExp = false;
+    const char* p = s;
+    if (*p == '+' || *p == '-') p++;
+    for (; *p; ++p) {
+      if (*p >= '0' && *p <= '9') { seenDigit = true; continue; }
+      if (*p == '.' && !seenDot && !seenExp) { seenDot = true; continue; }
+      if ((*p == 'e' || *p == 'E') && seenDigit && !seenExp) {
+        seenExp = true;
+        // optional sign after exponent
+        if (*(p+1) == '+' || *(p+1) == '-') ++p;
+        if (!(*(p+1) >= '0' && *(p+1) <= '9')) return false;
+        continue;
+      }
+      return false;
+    }
+    return seenDigit;
+  };
+
+  auto isBool = [](const char* s) -> int {
+    // returns 1 for true, 0 for false, -1 for not bool
+    if (!s) return -1;
+    // case-insensitive compare
+    String v(s); v.trim(); v.toLowerCase();
+    if (v == "true")  return 1;
+    if (v == "false") return 0;
+    return -1;
+  };
+
+  // Decide and assign
+  int boolFlag = isBool(jsonVal);
+  if (boolFlag == 1) {
+    doc[jsonKey] = true;
+  } else if (boolFlag == 0) {
+    doc[jsonKey] = false;
+  } else if (isNumber(jsonVal)) {
+    // choose integer vs floating
+    bool hasDotOrExp = (strchr(jsonVal, '.') || strchr(jsonVal, 'e') || strchr(jsonVal, 'E'));
+    if (hasDotOrExp) {
+      doc[jsonKey] = atof(jsonVal);
+    } else {
+      // long long to be safe on ports
+      doc[jsonKey] = (long long) atoll(jsonVal);
+    }
+  } else {
+    doc[jsonKey] = jsonVal;  // keep as string
+  }
+
+  // 3) Serialize to a temp file, then atomically replace the original
+  const char* TMP_PATH = "/.tmp_json_write";
+  // Clean any old temp
+  if (FFat.exists(TMP_PATH)) {
+    if (!deleteFile(FFat, TMP_PATH)) {
+      textOutput("updateJsonVal(): failed to clear temp file");
+      return false;
+    }
+  }
+
+  File out = FFat.open(TMP_PATH, FILE_WRITE);
+  if (!out) {
+    textOutput("updateJsonVal(): open temp for write failed");
+    return false;
+  }
+  // Pretty for readability when you view it in the Web UI.
+  if (serializeJsonPretty(doc, out) == 0) {
+    out.close();
+    deleteFile(FFat, TMP_PATH);
+    textOutput("updateJsonVal(): serialize failed");
+    return false;
+  }
+  out.close();
+
+  // Replace original
+  if (hadExisting) {
+    if (!deleteFile(FFat, filename)) {
+      deleteFile(FFat, TMP_PATH);
+      textOutput("updateJsonVal(): could not delete original");
+      return false;
+    }
+  }
+  if (!renameFile(FFat, TMP_PATH, filename)) {
+    // Fallback: try to copy then delete temp if rename unavailable
+    File src = FFat.open(TMP_PATH, FILE_READ);
+    File dst = FFat.open(filename, FILE_WRITE);
+    if (!src || !dst) {
+      if (src) src.close();
+      if (dst) dst.close();
+      deleteFile(FFat, TMP_PATH);
+      textOutput("updateJsonVal(): rename+copy fallback failed");
+      return false;
+    }
+    static uint8_t buf[512];
+    size_t n;
+    while ((n = src.read(buf, sizeof(buf))) > 0) dst.write(buf, n);
+    src.close(); dst.close();
+    deleteFile(FFat, TMP_PATH);
+  }
+
+  textOutput((String("JSON updated: ") + jsonKey + " -> " + jsonVal).c_str());
   return true;
 }
 
@@ -2752,6 +2885,23 @@ void displayKeys() {
     pageContent += "</td></tr>\n";
     count++;
   }
+  File suKeyFile = FFat.open(singleUseKeys_filename);
+  while (suKeyFile.available()) {
+    int l = suKeyFile.readBytesUntil('\n', buffer, sizeof(buffer));
+    if (l > 0 && buffer[l - 1] == '\r') {
+      buffer[l - 1] = 0; // if it's using Windows line endings, remove that too
+    } else {
+      buffer[l] = 0;
+    }
+    pageContent += "        <tr><td class='keyCell'>";
+    pageContent += buffer;
+    pageContent += "*</td><td class='keyDelCell'>";
+    pageContent += "<a class='keyDelLink' href='/remSuKey/";
+    pageContent += buffer;
+    pageContent += "'>DELETE</a>";
+    pageContent += "</td></tr>\n";
+    count++;
+  }
   if (count < 1) {
     pageContent += "        <tr><td class='keyCell'>[NO SAVED KEYS]</td></tr>\n";
   }
@@ -2759,7 +2909,8 @@ void displayKeys() {
   keyFile.close();
   pageContent += "      <form action='/addFormKey/' method='get'>\n";
   pageContent += "        <input type='text' id='key' name='key' placeholder='Enter new key' class='addKeyInput'></input>\n";
-  pageContent += "        <input type='submit' value='ADD' class='addKeyButton' required>\n";
+  pageContent += "        <input type='checkbox' id='su' name='su' class='adjustedCheckbox'></input><label class='checkboxLabel' for='su'>*Single Use&nbsp&nbsp</label>\n";
+  pageContent += "        <input type='submit' value='ADD' class='addKeyButton' required></input>\n";
   pageContent += "      </form>\n";
   pageContent += "      <br/>\n";
   
@@ -3090,7 +3241,7 @@ void displayFiles() {
   pageContent += "        </div>\n";
   pageContent += "      </form>\n";
   pageContent += "      <form method='GET' action='/createFileForm' style='margin-top:3px;'>\n";
-  pageContent += "        <input type='text' name='filename' placeholder='Enter new file name' class='addKeyInput' required>\n";
+  pageContent += "        <input type='text' name='filename' placeholder='Enter new file name' class='newFileInput' required>\n";
   pageContent += "        <input type='submit' value='CREATE' class='addKeyButton'>\n";
   pageContent += "      </form>\n";
   pageContent += "      <br/>\n";
@@ -3510,9 +3661,12 @@ const char* html_style = R"rawliteral(
       .statsBox {background-color: #303030; font-size: 11px; width: 300px; height: 130px; resize: vertical; color: var(--themeCol01);}
       .orangeButton {height 30px; width: 49px; auto;background-color: var(--themeCol01); border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid var(--themeCol01);}
       .orangeButton:hover {height 30px; width: 49px; background-color: var(--themeCol02); border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid var(--themeCol01);}
-      .addKeyInput {height 17px; width: 230px;border: 1px solid var(--themeCol01); font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black;}
+      .addKeyInput {height 17px; width: 131px;border: 1px solid var(--themeCol01); font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black;}
+      .newFileInput {height 17px; width: 230px;border: 1px solid var(--themeCol01); font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black;}
       .addKeyButton {height 30px; width: 60px; background-color: var(--themeCol01); border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid var(--themeCol01);}
       .addKeyButton:hover {height 30px; width: 60px; background-color: var(--themeCol02); border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid var(--themeCol01);}
+      .adjustedCheckbox {vertical-align: -3px;}
+      .checkboxLabel {font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: var(--themeCol01);}
       tr, td {border: 1px solid var(--themeCol01);}
       button {width: 300px; background-color: var(--themeCol01); border: none; text-decoration: none;}
       button:hover {width: 300px; background-color: var(--themeCol02); border: none; text-decoration: none;}
@@ -3836,6 +3990,10 @@ void startWebServer() {
     removeKey(webServer.pathArg(0));
     redirectHome();
   });
+  webServer.on(UriRegex("/remSuKey/([0-9a-zA-Z]{3,16})"), HTTP_GET, [&]() {
+    removeSingleUseKey(webServer.pathArg(0));
+    redirectHome();
+  });
   webServer.on(UriRegex("/previewFile/([\\w\\.\\-]{1,32})"), HTTP_GET, [&]() {
     previewFile(webServer.pathArg(0));
   });
@@ -3908,10 +4066,24 @@ void startWebServer() {
   });
   webServer.on("/", MainPage);
   webServer.on(UriRegex("/addFormKey/.{0,20}"), HTTP_GET, [&]() {
-    Serial.print("Writing key ");
-    Serial.print(webServer.arg("key"));
-    Serial.println(" from webUI input.");
-    writeKey(webServer.arg("key"));
+    String key = webServer.hasArg("key") ? webServer.arg("key") : webServer.pathArg(0);
+    key.trim();
+    key.toUpperCase();
+    bool singleUse = webServer.hasArg("su");
+    if (key.length() == 0) {
+      Serial.println("No key provided in /addFormKey");
+      redirectHome();
+      return;
+    }
+    if (singleUse) {
+      Serial.print("Writing SINGLE-USE key from webUI input: ");
+      Serial.println(key);
+      writeSingleUseKey(key, true);
+    } else {
+      Serial.print("Writing authorized key from webUI input: ");
+      Serial.println(key);
+      writeKey(key);
+    }
     redirectHome();
   });
   webServer.begin();
