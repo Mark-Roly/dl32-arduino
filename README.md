@@ -85,7 +85,7 @@ See descriptions of supported configuration parameters below:
 <tr><td width="140">restartTone</td><td width="150">(bool, true)</td><td width="660">When true, a short restart melody will play for selected restart events.</td></tr>
 <tr><td width="140">silentMode</td><td width="150">(bool, false)</td><td width="660">When true, the unit will not make any buzzer sounds.</td></tr>
 <tr><td width="140">garageMode</td><td width="150">(bool, false)</td><td width="660">When true, the unit will function in garage mode.</td></tr>
-<tr><td width="140">failSecure</td><td width="150">(bool, true)</td><td width="660">When true, unit will control a Fail Secure (Normally-Open) door strike. When false, unit will control a Fail Safe (Normally-Close) door strike.</td></tr>
+<tr><td width="140">failSecure</td><td width="150">(bool, true)</td><td width="660">When true, unit will control a Fail Secure (Normally-Open) door strike. When false, unit will control a Fail Safe (Normally-Closed) door strike.</td></tr>
 </table>
 
 ### Flashing configuration to the unit
