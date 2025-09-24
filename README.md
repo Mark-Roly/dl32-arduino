@@ -8,7 +8,7 @@
 <!-- ABOUT THE PROJECT -->
 ## About The Project
 An ongoing effort to create the perfect smart lock.<br/><br/>
-In short, the DL32-S3 is a smart lock controller that can be interacted with via RFID, keypad, MQTT, HTTP, FTP, Serial, and supports a varierty of accessories. It has a fully-featured web interface and supports OTS updates.<br/><br/>
+In short, the DL32-S3 is a smart lock controller that can be interacted with via RFID, keypad, MQTT, HTTP, FTP, Serial, and supports a varierty of accessories. It has a fully-featured web interface and supports OTA updates.<br/><br/>
 You can download the full user manual <a href="https://github.com/Mark-Roly/dl32-arduino/releases/latest/download/DL32-S3_UserManual.pdf">here</a>.
 
 <!-- GETTING STARTED -->
