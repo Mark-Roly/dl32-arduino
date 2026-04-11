@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 2025-09-09
+  Last updated 2026-04-11
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -30,7 +30,9 @@
 
 */
 
-#define codeVersion 20250909
+#define NEOPIX_PIN 47
+
+#define codeVersion 20260411
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
@@ -40,7 +42,7 @@
 #include <WebServer.h>          // WebServer by Ivan Grokhotkov https://github.com/espressif/arduino-esp32/blob/master/libraries/WebServer
 #include <SPI.h>                // SPI by Hristo Gochkov https://github.com/espressif/arduino-esp32/blob/master/libraries/SPI
 #include <PubSubClient.h>       // PubSubClient by Nick O'leary https://github.com/knolleary/pubsubclient
-#include <Adafruit_NeoPixel.h>  // Adafruit_NeoPixel by Adafruit https://github.com/adafruit/Adafruit_NeoPixel
+#include <FastLED.h>
 #include <Wiegand.h>            // YetAnotherArduinoWiegandLibrary by paula-raca https://github.com/paulo-raca/YetAnotherArduinoWiegandLibrary
 #include <ArduinoJson.h>        // ArduinoJSON by Benoit Blanchon https://arduinojson.org/?utm_source=meta&utm_medium=library.properties
 #include <Ticker.h>             // Ticker by Bert Melis https://github.com/espressif/arduino-esp32/blob/master/libraries/Ticker
@@ -56,12 +58,17 @@
 #include <algorithm>            // algorithm library from C++ standard library https://github.com/espressif/arduino-esp32
 #include <HTTPClient.h>         // HTTPClient by Markus Sattler https://github.com/espressif/arduino-esp32/tree/master/libraries/HTTPClient
 #include <ESPmDNS.h>            // ESPmDNS by Hristo Gochkov https://github.com/espressif/arduino-esp32/tree/master/libraries/ESPmDNS
-#include <math.h>
-#include "esp_timer.h"
-#include "driver/gpio.h"
+#include <math.h>               // math from GNU ISO C++ Library
+#include <esp_timer.h>          // esp_timer by espressif
+#include <driver/gpio.h>        // gpio by espressif
+
+CRGB leds[1];
 
 static esp_timer_handle_t tone_timer = nullptr;
 static volatile bool toneLevel = false;
+
+const char *themes[] = {"orange", "green", "yellow", "purple", "red", "blue", "pink", "aqua", "grey", "rainbow"};
+const size_t themeCount = sizeof(themes) / sizeof(themes[0]);
 
 // Define struct for storing configuration
 struct Config {
@@ -80,6 +87,9 @@ struct Config {
   bool mqtt_tls;
   char mqtt_user[32];
   char mqtt_password[32];
+  bool webui_auth;
+  char webui_user[32];
+  char webui_pass[32];
   bool magsr_present;
   bool ftp_enabled;
   int ftp_port;
@@ -114,6 +124,7 @@ struct Config {
 // Variables for FreeRTOS non-blocking bell task
 TaskHandle_t bellTaskHandle = nullptr;
 
+// Define struct for melody note event
 struct NoteEvent {
   int tick;
   note_t note;
@@ -128,6 +139,7 @@ struct Addressing {
   char gatewayIP[16];
 };
 
+// Translation from note object to frequency
 int noteToFreqHz(note_t note, int octave) {
   // Reference C4 = 261.63 Hz
   static const float c4 = 261.63f;
@@ -171,9 +183,6 @@ int gh[] = {0, 2, 4, 12, 13, 8, 11};
 
 #define WDT_TIMEOUT_S 60
 
-// Number of neopixels used
-#define NUMPIXELS 1
-
 // Format FFat on boot?
 #define FORMAT_FFAT false
 
@@ -189,11 +198,11 @@ const char* hwChip;
 String scannedKey = "";
 String serialCmd;
 
-boolean forceOffline = false;
+boolean force_offline = false;
 boolean SD_present = false;
 boolean FFat_present = false;
 boolean staticIP = false;
-boolean doorOpen = true;
+boolean door_open = true;
 boolean add_mode = false;
 
 // String holder for html webpage content
@@ -225,6 +234,9 @@ const char* basicConfigTemplate = R"(
     "mqtt_auth": false,
     "mqtt_user": "mqttUser",
     "mqtt_password": "mqttPass",
+    "webui_auth": false,
+    "webui_user": "admin",
+    "webui_pass": "lock123",
     "ftp_enabled": false,
     "ftp_user": "ftpUser",
     "ftp_password": "ftpPass",
@@ -245,6 +257,9 @@ const char* fullConfigTemplate = R"(
     "mqtt_auth": false,
     "mqtt_user": "mqttUser",
     "mqtt_password": "mqttPass",
+    "webui_auth": false,
+    "webui_user": "admin",
+    "webui_pass": "lock123",
     "magsr_present": false,
     "ftp_enabled": false,
     "ftp_user": "ftpUser",
@@ -307,7 +322,6 @@ Config config;
 Addressing addressing;
 WiFiClient wifiClient;
 WiFiClientSecure wifiClient_tls;
-Adafruit_NeoPixel pixel;
 WebServer webServer(80);
 File uploadFile;
 Wiegand wiegand;
@@ -474,7 +488,6 @@ void initGPIO() {
 
 void setPinModes() {
   // outputs
-  textOutput("Configuring GPIO...");
   pinMode(config.buzzer_pin, OUTPUT);
   pinMode(config.lockRelay_pin, OUTPUT);
   digitalWrite(config.buzzer_pin, LOW);
@@ -848,7 +861,7 @@ void simulateKey(String key) {
   }
   scannedKey = key;
   scannedKey.toUpperCase();
-  textOutput(("Simulating key scan" + key).c_str());
+  textOutput(("Simulating key scan " + key).c_str());
   checkKey();  // This triggers the same logic as real scans
 }
 
@@ -1227,6 +1240,9 @@ bool loadFSJSON_config(const char* config_filename, Config& config) {
   config.mqtt_tls = config_doc["mqtt_tls"] | false;
   strlcpy(config.mqtt_user, config_doc["mqtt_user"] | "mqtt", sizeof(config.mqtt_user));
   strlcpy(config.mqtt_password, config_doc["mqtt_password"] | "null_mqtt_pass", sizeof(config.mqtt_password));
+  config.webui_auth = config_doc["webui_auth"] | false;
+  strlcpy(config.webui_user, config_doc["webui_user"] | "admin", sizeof(config.webui_user));
+  strlcpy(config.webui_pass, config_doc["webui_pass"] | "lock123", sizeof(config.webui_pass));
   config.magsr_present = config_doc["magsr_present"] | false;
   config.ftp_enabled = config_doc["ftp_enabled"] | false;
   config.ftp_port = 21; // current library does not allow argument-defined port
@@ -1646,40 +1662,43 @@ String urlDecode(const String& input) {
 // NOTE: Onboard pixel uses G,R,B
 
 int returnPixelBrightness(int brightness) {
-  if ((brightness >= 0) && (brightness <= 10)) {
-    return brightness;
-  } else {
-    return 1;
-  }
+  if ((brightness >= 0) && (brightness <= 10)) return brightness;
+  return 1;
 }
 
-void setPixRed() {
-  pixel.setPixelColor(0, pixel.Color(0,(25*config.pixelBrightness),0));
-  pixel.show();
-}
-
-void setPixAmber() {
-  pixel.setPixelColor(0, pixel.Color((10*config.pixelBrightness),(25*config.pixelBrightness),0));
-  pixel.show();
-}
-
-void setPixGreen() {
-  pixel.setPixelColor(0, pixel.Color((25*config.pixelBrightness),0,0));
-  pixel.show();
-}
-
-void setPixPurple() {
-  pixel.setPixelColor(0, pixel.Color(0,(10*config.pixelBrightness),(25*config.pixelBrightness)));
-  pixel.show();
-}
-
-void setPixBlue() {
-  int b_val = 25*config.pixelBrightness;
-  pixel.setPixelColor(0, pixel.Color(0,0,(25*config.pixelBrightness)));
-  pixel.show();
-}
+void setPixRed()    { leds[0] = CRGB(0, 25*config.pixelBrightness, 0); FastLED.show(); }
+void setPixAmber()  { leds[0] = CRGB(10*config.pixelBrightness, 25*config.pixelBrightness, 0); FastLED.show(); }
+void setPixGreen()  { leds[0] = CRGB(25*config.pixelBrightness, 0, 0); FastLED.show(); }
+void setPixPurple() { leds[0] = CRGB(0, 10*config.pixelBrightness, 25*config.pixelBrightness); FastLED.show(); }
+void setPixBlue()   { leds[0] = CRGB(0, 0, 25*config.pixelBrightness); FastLED.show(); }
 
 // --- Wifi Functions --- Wifi Functions --- Wifi Functions --- Wifi Functions --- Wifi Functions --- Wifi Functions --- Wifi Functions ---
+
+//Basic auth for WebUI
+
+bool requireWebUIAuth() {
+  if (!config.webui_auth) return true;
+
+  // If creds are blank, refuse (safer than allowing)
+  if (strlen(config.webui_user) == 0 || strlen(config.webui_pass) == 0) {
+    webServer.send(403, "text/plain", "WebUI auth enabled but credentials are empty");
+    return false;
+  }
+
+  if (!webServer.authenticate(config.webui_user, config.webui_pass)) {
+    // Browser will pop login prompt
+    webServer.requestAuthentication(BASIC_AUTH, "DL32 WebUI", "Authentication required");
+    return false;
+  }
+  return true;
+}
+
+// For upload streaming callbacks: don't try to send a 401 mid-upload; just drop the connection.
+bool webUIAuthOK_NoChallenge() {
+  if (!config.webui_auth) return true;
+  if (strlen(config.webui_user) == 0 || strlen(config.webui_pass) == 0) return false;
+  return webServer.authenticate(config.webui_user, config.webui_pass);
+}
 
 // Wifi Setup Mode (When AUX is held during startup)
 void startWifiSetupPortal() {
@@ -1716,22 +1735,26 @@ void startWifiSetupPortal() {
       .fileMgCell:hover {height: 15px; width: 45px; background-color: var(--themeCol02); color: black; border: 1px solid #000000}
       .fileMgLink {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; text-decoration: none;}
       .fileMgInputFile {height: 18px; width: 215px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .fileMgInputFile:hover {height: 18px; width: 215px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .fileMgInputFile:hover {height: 18px; width: 215px; margin-left:0px; background-color: var(--themeCol02); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000}
       .fileMgInputButton {height: 18px; width: 80px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .fileMgInputButton:hover {height: 18px; width: 80px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .fileMgInputButton:hover {height: 18px; width: 80px; margin-left:0px; background-color: var(--themeCol02); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000}
       .firmwareInputFile {height: 18px; margin-top: 5px; width: 235px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .firmwareInputFile:hover {height: 18px; margin-top: 5px; width: 235px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .firmwareInputFile:hover {height: 18px; margin-top: 5px; width: 235px; margin-left:0px; background-color: var(--themeCol02); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000}
       .firmwareInputButton {height: 18px; margin-top: 5px; width: 60px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .firmwareInputButton:hover {height: 18px; margin-top: 5px; width: 60px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .firmwareInputButton:hover {height: 18px; margin-top: 5px; width: 60px; margin-left:0px; background-color: var(--themeCol02); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000}
       .targetBell {height: 18px; width: 175px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .targetBell:hover {height: 18px; width: 175px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .targetBell:hover {height: 18px; width: 175px; margin-left:0px; background-color: var(--themeCol02); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000}
       .targetBellButton {height: 18px; width: 60px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .targetBellButton:hover {height: 18px; width: 60px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .targetBellButton:hover {height: 18px; width: 60px; margin-left:0px; background-color: var(--themeCol02); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000}
+      .targetTheme {height: 18px; width: 238px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .targetTheme:hover {height: 18px; width: 238px; margin-left:0px; background-color: var(--themeCol02); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000}
+      .targetThemeButton {height: 18px; width: 60px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .targetThemeButton:hover {height: 18px; width: 60px; margin-left:0px; background-color: var(--themeCol02); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000} 
       .inputRow {display: flex; flex-direction: row; gap: 2px; justify-content: center; align-items: center; border: 0;}
       .updateInput {height: 18px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .updateInput:hover {height: 18px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .updateInput:hover {height: 18px; margin-left:0px; background-color: var(--themeCol02); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000}
       .uploadBar {width:300px;}
-      .statsBox {background-color: #303030; font-size: 11px; width: 300px; height: 130px; resize: vertical; color: var(--themeCol01);}
+      .statsBox {background-color: #303030; font-size: 11px; width: 300px; height: 150px; resize: vertical; color: var(--themeCol01);}
       .orangeButton {height 30px; width: 49px; auto;background-color: var(--themeCol01); border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid var(--themeCol01);}
       .orangeButton:hover {height 30px; width: 49px; background-color: var(--themeCol02); border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid var(--themeCol01);}
       .addKeyInput {height 17px; width: 230px;border: 1px solid var(--themeCol01); font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black;}
@@ -1770,8 +1793,6 @@ void startWifiSetupPortal() {
     String password = setupServer.arg("password");
 
     if (ssid.length() > 0 && password.length() > 0) {
-
-
       if (FFat.exists(config_filename)) {
         // Open the config file for reading
         File configFile = FFat.open(config_filename, FILE_READ);
@@ -1964,7 +1985,7 @@ void garage_toggle() {
 
 // Open garage door
 void garage_open() {
-  if (config.garageMode && (doorOpen == false)) {
+  if (config.garageMode && (door_open == false)) {
     textOutput("Opening garage door");
     setPixGreen();
     digitalWrite(config.lockRelay_pin, HIGH);
@@ -1972,7 +1993,7 @@ void garage_open() {
     delay(config.garageMomentaryDur_Ms);
     digitalWrite(config.lockRelay_pin, LOW);
     setPixBlue();
-  } else if  (config.garageMode && (doorOpen)) {
+  } else if  (config.garageMode && (door_open)) {
     textOutput("Door is already open!");
   } else if (config.garageMode == false) {
     textOutput("Unit is not in garage mode.");
@@ -1982,7 +2003,7 @@ void garage_open() {
 
 // Close garage door
 void garage_close() {
-  if (config.garageMode && doorOpen) {
+  if (config.garageMode && door_open) {
     textOutput("Closing garage door");
     setPixGreen();
     digitalWrite(config.lockRelay_pin, HIGH);
@@ -1990,7 +2011,7 @@ void garage_close() {
     delay(config.garageMomentaryDur_Ms);
     digitalWrite(config.lockRelay_pin, LOW);
     setPixBlue();
-  } else if  (config.garageMode && (doorOpen == false)) {
+  } else if  (config.garageMode && (door_open == false)) {
     textOutput("Door is already closed!");
   } else if (config.garageMode == false) {
     textOutput("Unit is not in garage mode.");
@@ -2154,13 +2175,13 @@ void checkBell() {
 
 // Check magnetic sensor for open/closed door state (Optional)
 void checkMagSensor() {
-  if (doorOpen == true && digitalRead(config.magSensor_pin) == LOW && config.magsr_present) {
+  if (door_open == true && digitalRead(config.magSensor_pin) == LOW && config.magsr_present) {
     //send not that door has closed
-    doorOpen = false;
-    textOutput("door_closed");
-  } else if (doorOpen == false && digitalRead(config.magSensor_pin) == HIGH && config.magsr_present) {
-    doorOpen = true;
-    textOutput("door_opened");
+    door_open = false;
+    textOutput("door closed");
+  } else if (door_open == false && digitalRead(config.magSensor_pin) == HIGH && config.magsr_present) {
+    door_open = true;
+    textOutput("door opened");
   }
 }
 
@@ -2214,6 +2235,45 @@ boolean setCurrentBell(String selectedBell) {
   copyFileFFat(fullPath, bell_filename);
   playTwinkleUpTone();
   loadBellFile();
+  return true;
+}
+
+// Set a desired theme as the current theme
+boolean setCurrentTheme(String selectedTheme) {
+  selectedTheme.toCharArray(config.theme, sizeof(config.theme));
+  if (FFat.exists(config_filename)) {
+    // Open the config file for reading
+    File configFile = FFat.open(config_filename, FILE_READ);
+    if (!configFile) {
+      textOutput("Failed to open existing config file for reading");
+      webServer.send(500, "text/plain", "Unable to read existing config");
+      return false;
+    }
+    // Parse the existing JSON into a document
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, configFile);
+    configFile.close();
+
+    // if (error) { bleh - need to fix
+    //   textOutput("Failed to parse existing config: ");
+    //   Serial.println(error.c_str());
+    //   webServer.send(500, "text/plain", "Invalid config file");
+    //   return false;
+    // }
+
+    // Update or create the required theme
+    doc["theme"] = selectedTheme;
+    // Save the updated config back to the same file
+    configFile = FFat.open(config_filename, FILE_WRITE);
+    if (!configFile) {
+      textOutput("Failed to open config file for writing");
+      webServer.send(500, "text/plain", "Failed to write updated config");
+      return false;
+    }
+    serializeJsonPretty(doc, configFile);
+    configFile.close();
+  }
+  playTwinkleUpTone();
   return true;
 }
 
@@ -2442,7 +2502,6 @@ void playRandomTone() {
   }
 }
 
-
 void playBellFile(String filename) {
   if (digitalRead(DS03) == LOW||config.silentMode) {
     return;
@@ -2469,7 +2528,7 @@ void playBellFile(String filename) {
       taskSequence,      // Param
       1,                 // Priority (low)
       &bellTaskHandle,   // Handle
-      1                  // Core (1 to stay off WiFi core)
+      0                  // Core (0 to stay off WiFi core)
     );
   } else {
     textOutput("Bell is already playing.");
@@ -2491,7 +2550,7 @@ void ringBell() {
       taskSequence,      // Param
       1,                 // Priority (low)
       &bellTaskHandle,   // Handle
-      1                  // Core (1 to stay off WiFi core)
+      0                  // Core (1 to stay off WiFi core)
     );
   } else {
     textOutput("Bell is already playing.");
@@ -2734,11 +2793,15 @@ int detectHardwareRevision() {
   // Read ADC value (averaged)
   uint16_t adc = readAdcAvg(attSensor_pin);
   float voltage = (adc * 3.3f) / 4095.0f;
+  //Serial.print("Version detect voltage = ");
+  //Serial.println(voltage);
   // Decide based on thresholds (replace 0 with real revision IDs later)
   if (voltage < 0.02f) {
     return 20240812;  // ~0 Ω
+  } else if (voltage < 0.8f) {
+    return 20260325;  // 0.6 for revision 20260325
   } else if (voltage < 0.12f) {
-    return 0;  // ~100 Ω or board not connected
+    return 0;  // ~100 Ω
   } else if (voltage < 0.20f) {
     return 1;  // ~220 Ω
   } else if (voltage < 0.30f) {
@@ -2853,7 +2916,6 @@ boolean executeCommand(String command) {
     garage_close();
   } else if (command.startsWith("simulate-key ")) {
     String simulatedKey = serialCmd.substring(String("simulate-key ").length());
-    textOutput(("Simulating key: " + simulatedKey).c_str());
     simulateKey(simulatedKey);
   } else if (command.startsWith("add-key ")) {
     String keyToAdd = serialCmd.substring(String("add-key ").length());
@@ -2875,12 +2937,12 @@ boolean executeCommand(String command) {
 }
 
 void listCmnds() {
-  textOutput("add-key-mode\ncopy-config-sd-to-ffat\ncopy-keys-sd-to-ffat\ngarage-close\ngarage-open\ngarage-toggle\nlist-commands\nlist-ffat\nlist-keys\nlist-sd\npurge-addressing\npurge-config\npurge-keys\nrestart\nring-bell\nshow-config\nshow-version\nstats\nunlock");
+  textOutput("add-key <key>\nadd-key-mode\nadd-random-single-use-keys <number>\nadd-single-use-key <key>\ncopy-config-sd-to-ffat\ncopy-keys-sd-to-ffat\ngarage-close\ngarage-open\ngarage-toggle\ngithub-ota\nlist-commands\nlist-ffat\nlist-keys\nlist-sd\npurge-addressing\npurge-config\npurge-keys\nreboot\nrestart\nring-bell\nshow-config\nshow-version\nsimulate-key <key>\nstats\nunlock");
 }
 
 // --- FTP Functions --- FTP Functions --- FTP Functions --- FTP Functions --- FTP Functions --- FTP Functions ---
 
-void _callback(FtpOperation ftpOperation, unsigned int freeSpace, unsigned int totalSpace){
+void _callback(FtpOperation ftpOperation, uint32_t freeSpace, uint32_t totalSpace){
   switch (ftpOperation) {
     case FTP_CONNECT:
       textOutput("FTP client connected");
@@ -2896,7 +2958,7 @@ void _callback(FtpOperation ftpOperation, unsigned int freeSpace, unsigned int t
   }
 };
 
-void _transferCallback(FtpTransferOperation ftpOperation, const char* name, unsigned int transferredSize){
+void _transferCallback(FtpTransferOperation ftpOperation, const char* name, uint32_t transferredSize){
   switch (ftpOperation) {
     case FTP_UPLOAD_START:
       textOutput("FTP upload started");
@@ -2936,6 +2998,7 @@ void redirectHome() {
 }
 
 void handleNotFound() {
+  if (!requireWebUIAuth()) return;
   String message = "File Not Found\n\n";
   message += "URI: ";
   message += webServer.uri();
@@ -2996,7 +3059,7 @@ void displayKeys() {
     }
     pageContent += "        <tr><td class='keyCell'>";
     pageContent += buffer;
-    pageContent += "*</td><td class='keyDelCell'>";
+    pageContent += "<a><sup>*</sup></a></td><td class='keyDelCell'>";
     pageContent += "<a class='keyDelLink' href='/remSuKey/";
     pageContent += buffer;
     pageContent += "'>DELETE</a>";
@@ -3309,7 +3372,7 @@ void displayFiles() {
         name = name.substring(1);
       }
       pageContent += "        <tr><td class='fileCell'>";
-      pageContent += (name + " (" + String(file.size()) + " bytes)");
+      pageContent += (name + " (" + String(file.size()) + " B)");
       pageContent += "</td><td class='fileMgCell'>";
       pageContent += "<a class='fileMgLink' href='#' onclick='previewFile(\"";
       pageContent += name;
@@ -3414,7 +3477,7 @@ void garageToggleHTTP() {
 
 void garageOpenHTTP() {
   redirectHome();
-  if (doorOpen == false) {
+  if (door_open == false) {
     textOutput("Garage Door opened HTTP");
     garage_open();
   }
@@ -3422,7 +3485,7 @@ void garageOpenHTTP() {
 
 void garageCloseHTTP() {
   redirectHome();
-  if (doorOpen) {
+  if (door_open) {
     textOutput("Garage Door closed via HTTP");
     garage_close();
   }
@@ -3743,22 +3806,26 @@ const char* html_style = R"rawliteral(
       .fileMgCell:hover {height: 15px; width: 45px; background-color: var(--themeCol02); color: black; border: 1px solid #000000}
       .fileMgLink {font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; text-decoration: none;}
       .fileMgInputFile {height: 18px; width: 215px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .fileMgInputFile:hover {height: 18px; width: 215px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .fileMgInputFile:hover {height: 18px; width: 215px; margin-left:0px; background-color: var(--themeCol02); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000}
       .fileMgInputButton {height: 18px; width: 80px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .fileMgInputButton:hover {height: 18px; width: 80px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .fileMgInputButton:hover {height: 18px; width: 80px; margin-left:0px; background-color: var(--themeCol02); color: black font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000}
       .firmwareInputFile {height: 18px; margin-top: 5px; width: 235px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .firmwareInputFile:hover {height: 18px; margin-top: 5px; width: 235px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .firmwareInputFile:hover {height: 18px; margin-top: 5px; width: 235px; margin-left:0px; background-color: var(--themeCol02); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000}
       .firmwareInputButton {height: 18px; margin-top: 5px; width: 60px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .firmwareInputButton:hover {height: 18px; margin-top: 5px; width: 60px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .firmwareInputButton:hover {height: 18px; margin-top: 5px; width: 60px; margin-left:0px; background-color: var(--themeCol02); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000}
       .targetBell {height: 18px; width: 175px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .targetBell:hover {height: 18px; width: 175px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .targetBell:hover {height: 18px; width: 175px; margin-left:0px; background-color: var(--themeCol02); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000}
       .targetBellButton {height: 18px; width: 60px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
-      .targetBellButton:hover {height: 18px; width: 60px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
+      .targetBellButton:hover {height: 18px; width: 60px; margin-left:0px; background-color: var(--themeCol02); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000}
+      .targetTheme {height: 18px; width: 238px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .targetTheme:hover {height: 18px; width: 238px; margin-left:0px; background-color: var(--themeCol02); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000}
+      .targetThemeButton {height: 18px; width: 60px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
+      .targetThemeButton:hover {height: 18px; width: 60px; margin-left:0px; background-color: var(--themeCol02); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000} 
       .inputRow {display: flex; flex-direction: row; gap: 2px; justify-content: center; align-items: center; border: 0;}
       .updateInput {height: 18px; margin-left:0px; background-color: var(--themeCol01); color: black; font-family:Arial, Helvetica, sans-serif; font-size: 10px; border: 1px solid #000000; vertical-align:middle}
       .updateInput:hover {height: 18px; margin-left:0px; background-color: var(--themeCol02); color: font-family:Arial, Helvetica, sans-serif; font-size: 10px; black; border: 1px solid #000000}
       .uploadBar {width:300px;}
-      .statsBox {background-color: #303030; font-size: 11px; width: 300px; height: 130px; resize: vertical; color: var(--themeCol01);}
+      .statsBox {background-color: #303030; font-size: 11px; width: 300px; height: 150px; resize: vertical; color: var(--themeCol01);}
       .orangeButton {height 30px; width: 49px; auto;background-color: var(--themeCol01); border: none; font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid var(--themeCol01);}
       .orangeButton:hover {height 30px; width: 49px; background-color: var(--themeCol02); border: none; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: black; border: 1px solid var(--themeCol01);}
       .addKeyInput {height 17px; width: 131px;border: 1px solid var(--themeCol01); font-family:Arial, Helvetica, sans-serif; font-size: 10px; color: black;}
@@ -3844,7 +3911,7 @@ void siteHeader() {
 void siteModes() {
   int modeCount = 0;
   pageContent += "      <a class='smalltext'>";
-  if (forceOffline) {
+  if (force_offline) {
     pageContent += " [Forced Offline Mode] ";
     modeCount++;
   }
@@ -3871,10 +3938,10 @@ void siteButtons() {
   if (config.garageMode) {
     pageContent += "      <a href='/garageToggleHTTP'><button>Toggle</button></a>\n";
     pageContent += "      <br/>\n";
-    if (doorOpen == false) {
+    if (door_open == false) {
       pageContent += "      <a href='/garageOpenHTTP'><button>Open</button></a>\n";
     }
-    if (doorOpen) {
+    if (door_open) {
       pageContent += "      <a href='/garageCloseHTTP'><button>Close</button></a>\n";
     }
   } else {
@@ -3887,6 +3954,24 @@ void siteButtons() {
   pageContent += "      <br/>\n";
   pageContent += "      <br/>\n";
   pageContent += "      <a class='header'>System</a>\n";
+  pageContent += "      <div class='inputRow'>\n";
+  pageContent += "        <form action='/setFormTheme/' method='get'>\n";
+  pageContent += "          <select class='targetTheme' name='targetTheme'>\n";
+  for (size_t i = 0; i < themeCount; i++) {
+    pageContent += "            <option value='";
+    pageContent += themes[i];
+    pageContent += "'";
+    if (strcmp(themes[i], config.theme) == 0) {
+      pageContent += " selected";
+    }
+    pageContent += ">";
+    pageContent += themes[i];
+    pageContent += "</option>\n";
+  }
+  pageContent += "          </select>\n";
+  pageContent += "          <input class='targetThemeButton' type='submit' name='select' value='SELECT'>\n";
+  pageContent += "        </form>\n";
+  pageContent += "      </div>\n";
   pageContent += "      <a href='/downloadFile";
   pageContent += config_filename;
   pageContent += "'><button>Download config file</button></a>\n";
@@ -3977,35 +4062,94 @@ void startFTPServer() {
 }
 
 void startWebServer() {
-  webServer.on("/unlockHTTP", unlockHTTP);
-  webServer.on("/garageToggleHTTP", garageToggleHTTP);
-  webServer.on("/garageOpenHTTP", garageOpenHTTP);
-  webServer.on("/garageCloseHTTP", garageCloseHTTP);
-  webServer.on("/ringBellHTTP", ringBellHTTP);
-  webServer.on("/addKeyModeHTTP", addKeyModeHTTP);
-  webServer.on("/purgeKeysHTTP", purgeKeysHTTP);
-  webServer.on("/purgeConfigHTTP", purgeConfigHTTP);
-  webServer.on("/restartESPHTTP", restartESPHTTP);
-  webServer.on("/configSDtoFFatHTTP", configSDtoFFatHTTP);
-  webServer.on("/configFFattoSDHTTP", configFFattoSDHTTP);
-  webServer.on("/keysSDtoFFatHTTP", keysSDtoFFatHTTP);
-  webServer.on("/keysFFattoSDHTTP", keysFFattoSDHTTP);
-  webServer.on("/saveAddressingStaticHTTP", saveAddressingStaticHTTP);
-  webServer.on("/addressingStaticSDtoFFatHTTP", addressingStaticSDtoFFatHTTP);
-  webServer.on("/purgeAddressingStaticHTTP", purgeAddressingStaticHTTP);
-  webServer.on("/githubOtaLatestHTTP", githubOtaLatestHTTP);
-  webServer.on("/add10xRandomSingleUseKeys", add10xRandomSingleUseKeysHTTP);
+  webServer.on("/unlockHTTP", HTTP_GET, []() {
+    if (!requireWebUIAuth()) {
+      return;
+    }
+    unlockHTTP();
+  });
+  webServer.on("/garageToggleHTTP", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
+    garageToggleHTTP();
+  });
+  webServer.on("/garageOpenHTTP", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
+    garageOpenHTTP();
+  });
+  webServer.on("/garageCloseHTTP", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
+    garageCloseHTTP();
+  });
+  webServer.on("/ringBellHTTP", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
+    ringBellHTTP();
+  });
+  webServer.on("/addKeyModeHTTP", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
+    addKeyModeHTTP();
+  });
+  webServer.on("/purgeKeysHTTP", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
+    purgeKeysHTTP();
+  });
+  webServer.on("/purgeConfigHTTP", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
+    purgeConfigHTTP();
+  });
+  webServer.on("/restartESPHTTP", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
+    restartESPHTTP();
+  });
+  webServer.on("/configSDtoFFatHTTP", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
+    configSDtoFFatHTTP();
+  });
+  webServer.on("/configFFattoSDHTTP", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
+    configFFattoSDHTTP();
+  });
+  webServer.on("/keysSDtoFFatHTTP", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
+    keysSDtoFFatHTTP();
+  });
+  webServer.on("/keysFFattoSDHTTP", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
+    keysFFattoSDHTTP();
+  });
+  webServer.on("/saveAddressingStaticHTTP", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
+    saveAddressingStaticHTTP();
+  });
+  webServer.on("/addressingStaticSDtoFFatHTTP", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
+    addressingStaticSDtoFFatHTTP();
+  });
+  webServer.on("/purgeAddressingStaticHTTP", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
+    purgeAddressingStaticHTTP();
+  });
+  webServer.on("/githubOtaLatestHTTP", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
+    githubOtaLatestHTTP();
+  });
+  webServer.on("/add10xRandomSingleUseKeys", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
+    add10xRandomSingleUseKeysHTTP();
+  });
   webServer.on("/downloadBasicConfigTemplate", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
     webServer.sendHeader("Content-Type", "text/plain");
     webServer.sendHeader("Content-Disposition", "attachment; filename=\"dl32.json\"");
     webServer.send(200, "text/plain", basicConfigTemplate);
   });
   webServer.on("/downloadFullConfigTemplate", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
     webServer.sendHeader("Content-Type", "text/plain");
     webServer.sendHeader("Content-Disposition", "attachment; filename=\"dl32.json\"");
     webServer.send(200, "text/plain", fullConfigTemplate);
   });
   webServer.on("/downloadFFatTar", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
     File tar = createTarball();
     if (!tar) {
       webServer.send(500, "text/plain", "Failed to create tar archive");
@@ -4018,6 +4162,7 @@ void startWebServer() {
     tar.close();
   });
   webServer.on("/uploadTar", HTTP_POST, []() {
+    if (!requireWebUIAuth()) return;
     webServer.sendHeader("Location", "/?import=success", true);
     webServer.send(302, "text/plain", "");  
   }, []() {
@@ -4042,20 +4187,24 @@ void startWebServer() {
     }
   });
   webServer.on(UriRegex("/githubOtaVersionHTTP/([0-9]{8})"), HTTP_GET, [&]() {
+    if (!requireWebUIAuth()) return;
     githubOtaVersionHTTP();
   });
   webServer.on("/factoryResetHTTP", []() {
+    if (!requireWebUIAuth()) return;
     factoryReset();
     redirectHome();
     restart(1);
   });
   webServer.on(UriRegex("/setBell/([\\w\\.\\-]{1,32})"), HTTP_GET, [&]() {
+    if (!requireWebUIAuth()) return;
     Serial.print("Setting bell tone from url ");
     Serial.println(webServer.pathArg(0));
     setCurrentBell(webServer.pathArg(0));
     redirectHome();
   });
   webServer.on("/setFormBell/", HTTP_GET, [&]() {
+    if (!requireWebUIAuth()) return;
     if (webServer.hasArg("play")) {
       Serial.print("Playing bell: ");
       Serial.println(webServer.arg("targetBell"));
@@ -4068,11 +4217,22 @@ void startWebServer() {
       redirectHome();
     }
   });
+  webServer.on("/setFormTheme/", HTTP_GET, [&]() {
+    if (!requireWebUIAuth()) return;
+    if (webServer.hasArg("select")) {
+      Serial.print("Setting theme from WebUI: ");
+      Serial.println(webServer.arg("targetTheme"));
+      setCurrentTheme(webServer.arg("targetTheme"));
+      redirectHome();
+    }
+  });
   webServer.on(UriRegex("/addKey/([0-9a-zA-Z]{4,8})"), HTTP_GET, [&]() {
+    if (!requireWebUIAuth()) return;
     writeKey(webServer.pathArg(0));
     redirectHome();
   });
   webServer.on("/update_post", HTTP_POST, []() {
+    if (!requireWebUIAuth()) return;
     webServer.sendHeader("Connection", "close");
     if (Update.hasError()) {
       webServer.send(200, "text/plain", "Update Failed!");
@@ -4083,33 +4243,38 @@ void startWebServer() {
     }
   }, handleUploadOTA);
   webServer.on(UriRegex("/remKey/([0-9a-zA-Z]{3,16})"), HTTP_GET, [&]() {
+    if (!requireWebUIAuth()) return;
     removeKey(webServer.pathArg(0));
     redirectHome();
   });
   webServer.on(UriRegex("/remSuKey/([0-9a-zA-Z]{3,16})"), HTTP_GET, [&]() {
+    if (!requireWebUIAuth()) return;
     removeSingleUseKey(webServer.pathArg(0));
     redirectHome();
   });
   webServer.on(UriRegex("/previewFile/([\\w\\.\\-]{1,32})"), HTTP_GET, [&]() {
+    if (!requireWebUIAuth()) return;
     previewFile(webServer.pathArg(0));
   });
   webServer.on(UriRegex("/saveFile/(.+)"), HTTP_POST, []() {
-  String encoded = webServer.pathArg(0);
-  String filename = "/" + urlDecode(encoded);
-  if (!FFat_present || !FFat.exists(filename)) {
-    webServer.send(404, "text/plain", "File not found");
-    return;
-  }
-  File f = FFat.open(filename, "w");
-  if (!f) {
-    webServer.send(500, "text/plain", "Failed to open file");
-    return;
-  }
-  f.print(webServer.arg(0));
-  f.close();
-  webServer.send(200, "text/plain", "File saved");
+    if (!requireWebUIAuth()) return;
+    String encoded = webServer.pathArg(0);
+    String filename = "/" + urlDecode(encoded);
+    if (!FFat_present || !FFat.exists(filename)) {
+      webServer.send(404, "text/plain", "File not found");
+      return;
+    }
+    File f = FFat.open(filename, "w");
+    if (!f) {
+      webServer.send(500, "text/plain", "Failed to open file");
+      return;
+    }
+    f.print(webServer.arg(0));
+    f.close();
+    webServer.send(200, "text/plain", "File saved");
   });
   webServer.on(UriRegex("/downloadFile/([0-9a-zA-Z.\\-_]{3,32})"), HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
     String filename = "/" + webServer.pathArg(0);
     if (FFat.exists(filename)) {
       File file = FFat.open(filename, FILE_READ);
@@ -4122,6 +4287,7 @@ void startWebServer() {
     }
   });
   webServer.on(UriRegex("/deleteFile/(.+)"), HTTP_GET, [&]() {
+    if (!requireWebUIAuth()) return;
     String encoded = webServer.pathArg(0);
     String path = "/" + urlDecode(encoded);
     if (deleteFile(FFat, path.c_str())) {
@@ -4132,36 +4298,43 @@ void startWebServer() {
     redirectHome();
   });
   webServer.on(UriRegex("/serial/([0-9a-zA-Z_-]{3,10})"), HTTP_GET, [&]() {
+    if (!requireWebUIAuth()) return;
     Serial.print("URL Command entered: ");
     Serial.print(webServer.pathArg(0));
     executeCommand(webServer.pathArg(0));
     redirectHome();
   });
   webServer.on("/upload", HTTP_POST, []() {
+    if (!requireWebUIAuth()) return;
     redirectHome();
     playTwinkleUpTone();
   }, handleFileUpload);
   webServer.on("/createFileForm", HTTP_GET, []() {
-  if (!webServer.hasArg("filename")) {
-    webServer.send(400, "text/plain", "Missing filename");
-    return;
-  }
-  String name = "/" + urlDecode(webServer.arg("filename"));
-  if (FFat.exists(name)) {
-    webServer.send(200, "text/plain", "File already exists");
-    return;
-  }
-  File f = FFat.open(name, FILE_WRITE);
-  if (!f) {
-    webServer.send(500, "text/plain", "Failed to create file");
-    return;
-  }
-  f.close();
-  playTwinkleUpTone();
-  redirectHome();
+    if (!requireWebUIAuth()) return;
+    if (!webServer.hasArg("filename")) {
+      webServer.send(400, "text/plain", "Missing filename");
+      return;
+    }
+    String name = "/" + urlDecode(webServer.arg("filename"));
+    if (FFat.exists(name)) {
+      webServer.send(200, "text/plain", "File already exists");
+      return;
+    }
+    File f = FFat.open(name, FILE_WRITE);
+    if (!f) {
+      webServer.send(500, "text/plain", "Failed to create file");
+      return;
+    }
+    f.close();
+    playTwinkleUpTone();
+    redirectHome();
   });
-  webServer.on("/", MainPage);
+  webServer.on("/", HTTP_GET, []() {
+    if (!requireWebUIAuth()) return;
+    MainPage();
+  });
   webServer.on(UriRegex("/addFormKey/.{0,20}"), HTTP_GET, [&]() {
+    if (!requireWebUIAuth()) return;
     String key = webServer.hasArg("key") ? webServer.arg("key") : webServer.pathArg(0);
     key.trim();
     key.toUpperCase();
@@ -4172,7 +4345,7 @@ void startWebServer() {
       return;
     }
     if (singleUse) {
-      Serial.print("Writing SINGLE-USE key from webUI input: ");
+      Serial.print("Writing single-use key from webUI input: ");
       Serial.println(key);
       writeSingleUseKey(key, true);
     } else {
@@ -4186,7 +4359,12 @@ void startWebServer() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.print("Web Server started at http://");
     Serial.println(WiFi.localIP());
+    Serial.printf("WebUI auth ENABLED with user %s\n",
+      config.webui_user
+    );
   }
+  webServer.onNotFound(handleNotFound);
+  webServer.begin();
 }
 
 // --- File Upload Functions --- File Upload Functions --- File Upload Functions --- File Upload Functions --- File Upload Functions ---
@@ -4461,8 +4639,12 @@ void setup() {
   Serial.println("======================");
   Serial.println("|  STARTUP SEQUENCE  |");
   Serial.println("======================");
-  detectVersions();
+
+  hwChip = ESP.getChipModel();
+  Serial.println(("Chip model: " + String(hwChip)).c_str());
+
   initGPIO();
+  detectVersions();
   Serial.print("Initializing WDT...");
   secondTick.attach(1, ISRwatchdog);
   Serial.println("OK");
@@ -4477,6 +4659,9 @@ void setup() {
   loadFSJSON_config(config_filename, config);
   toneInit();   // creates the esp_timer and sets the pin mode
 
+  FastLED.addLeds<WS2812B, NEOPIX_PIN, GRB>(leds, 1);
+  FastLED.setBrightness(50);
+
   if (config.mqtt_tls && config.mqtt_auth == false) {
     if (!loadTLSClient()) {
       Serial.println("Could not load TLS client cert/key from FFat.");
@@ -4490,10 +4675,9 @@ void setup() {
     }
   }
   delay(500);
+  Serial.print("Configuring GPIO...");
   setPinModes();
   Serial.println("OK");
-  pixel = Adafruit_NeoPixel(NUMPIXELS, config.neopix_pin, NEO_GRB + NEO_KHZ800);
-  pixel.begin();
   Serial.print("Loading bell file...");
   loadBellFile();
   Serial.print("Loading addressing...");
@@ -4503,7 +4687,7 @@ void setup() {
   if (digitalRead(DS01) == LOW) {
     Serial.print("DIP Switch #1 ON");
     Serial.println(" - Forced offline mode");
-    forceOffline = true;
+    force_offline = true;
   }
   if (digitalRead(DS02) == LOW) {
     config.failSecure = false;
@@ -4522,7 +4706,7 @@ void setup() {
   if (!(config.wifi_enabled)) {
     Serial.print("Wifi disabled");
     Serial.println(" - Forced offline mode");
-    forceOffline = true;
+    force_offline = true;
   }
   if (config.magsr_present) {
     Serial.println("Door state sensor enabled");
@@ -4539,7 +4723,7 @@ void setup() {
     Serial.println("AUX Button held during startup - entering WiFi Setup mode");
     startWifiSetupPortal();
   }
-  if (forceOffline == false) {
+  if (force_offline == false) {
     connectWifi();
     printIPAddressingDetails();
     startWebServer();
@@ -4586,7 +4770,8 @@ void setup() {
 
 void loop() {
   // loop starts here
-  if (forceOffline == false) {
+  watchdogCount = 0;
+  if (force_offline == false) {
     if (WiFi.status() == WL_CONNECTED) {
       if (disconCount > 0) {
         restart(0);
