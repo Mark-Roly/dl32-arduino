@@ -16,6 +16,13 @@ You can download the full user manual <a href="https://github.com/Mark-Roly/dl32
 
 Since the controller is capable of running offline, no configuration file is required unless you intend to take advantage of online features such as web interface, remote unlock/monitoring, mqtt, ftp, OTA Updates, etc
 
+### Entering WiFi Setup Mode
+WiFi Setup Mode can be entered by booting the unit while holding the AUX button.
+Doing this will cause three upward tones to sound from the buzzer, and a WiFi Hotspot will be created with SSID "DL32-WIFI-CONFIG" and password "dl32setup".
+Once you join the hotspot from your device, you can access the configuration Web UI at http://192.168.4.1
+Enter the desired SSID and key, then click save.
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
 ### Preparing the SD card with configuration file dl32.json
 The easiest way to perform initial configuration, is by transferring your configuration file to the unit using an SD card. Create a text file on a FAT formatted SD card and name the file dl32.json (case sensitive).
 
@@ -51,7 +58,8 @@ See descriptions of supported configuration parameters below:
 <tr><td width="140">wifi_ssid</td><td width="150">(string)</td><td width="660">SSID for wifi network connection</td></tr>
 <tr><td width="140">wifi_password</td><td width="150">(string)</td><td width="660">Password for wifi network connection</td></tr>
 <tr><td width="140">mqtt_enabled</td><td width="150">(bool, false)</td><td width="660">Dictates whether or not the onboard mqtt client is enabled</td></tr>
-<tr><td width="140">mqtt_server</td><td width="150">(string)</td><td width="660">Hostname or IP address of remote mqtt broker</td></tr>
+<tr><td width="140">mqtt_server</td><td width="150">(int, 1883)</td><td width="660">Hostname or IP address of remote mqtt broker</td></tr>
+<tr><td width="140">mqtt_port</td><td width="150">(string)</td><td width="660">The network port used for connection to the mqtt broker</td></tr>
 <tr><td width="140">mqtt_topic</td><td width="150">(string, "dl32s3")</td><td width="660">mqtt topic base to use for sub topics</td></tr>
 <tr><td width="140">mqtt_client_name</td><td width="150">(string, "dl32s3")</td><td width="660">Client name to use for mqtt connection</td></tr>
 <tr><td width="140">mqtt_tls</td><td width="150">(bool, false)</td><td width="660">Dictates whether connection to the broker uses tls private key authentication (Disregards mqtt_auth, mqtt_user and mqtt_password when true. Requires 3x cert/key files. See doc)</td></tr>
@@ -62,6 +70,9 @@ See descriptions of supported configuration parameters below:
 <tr><td width="140">ftp_enabled</td><td width="150">(bool, false)</td><td width="660">Dictates whether or not the onboard ftp service is enabled</td></tr>
 <tr><td width="140">ftp_user</td><td width="150">(String, &ldquo;dl32s3&rdquo;)</td><td width="660">Username for ftp connections</td></tr>
 <tr><td width="140">ftp_password</td><td width="150">(String, &ldquo;dl32s3&rdquo;)</td><td width="660">Password for ftp connections</td></tr>
+<tr><td width="140">webui_auth</td><td width="150">(bool, false)</td><td width="660">Dictates whether or not auth is required to access the Web UI</td></tr>
+<tr><td width="140">webui_user</td><td width="150">(String, &ldquo;admin&rdquo;)</td><td width="660">Username for Web UI access</td></tr>
+<tr><td width="140">webui_password</td><td width="150">(String, &ldquo;lock123&rdquo;)</td><td width="660">Password for Web UI access</td></tr>
 <tr><td width="140">exitUnlockDur_S</td><td width="150">(int, 5)</td><td width="660">Time in seconds that the lock will remain unlocked for when exit button is pressed</td></tr>
 <tr><td width="140">httpUnlockDur_S</td><td width="150">(int, 5)</td><td width="660">Time in seconds that the lock will remain unlocked for when Web UI unlock is performed</td></tr>
 <tr><td width="140">keyUnlockDur_S</td><td width="150">(int, 5)</td><td width="660">Time in seconds that the lock will remain unlocked for when valid RFID key is read</td></tr>
