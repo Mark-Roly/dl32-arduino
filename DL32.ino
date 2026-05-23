@@ -2,7 +2,7 @@
 
   DL32 Aduino by Mark Booth
   For use with Wemos S3 and DL32 S3 hardware rev 20240812 or later
-  Last updated 2026-04-11
+  Last updated 2026-05-24
   https://github.com/Mark-Roly/dl32-arduino
 
   Board Profile: ESP32S3 Dev Module
@@ -32,17 +32,17 @@
 
 #define NEOPIX_PIN 47
 
-#define codeVersion 20260411
+#define codeVersion 20260524
 #define ARDUINOJSON_ENABLE_COMMENTS 1
 
 // Include Libraries
 #include <Arduino.h>            // Arduino by Arduino https://github.com/arduino/ArduinoCore-avr/blob/master/cores/arduino
-#include <esp_system.h>         // gives you esp_chip_info() todo
+#include <esp_system.h>         // esp_system by esspressif
 #include <WiFi.h>               // WiFi by Ivan Grokhotkov https://github.com/espressif/arduino-esp32/blob/master/libraries/WiFi
 #include <WebServer.h>          // WebServer by Ivan Grokhotkov https://github.com/espressif/arduino-esp32/blob/master/libraries/WebServer
 #include <SPI.h>                // SPI by Hristo Gochkov https://github.com/espressif/arduino-esp32/blob/master/libraries/SPI
 #include <PubSubClient.h>       // PubSubClient by Nick O'leary https://github.com/knolleary/pubsubclient
-#include <FastLED.h>
+#include <FastLED.h>            // FastLED by FastLED https://github.com/fastled/fastled
 #include <Wiegand.h>            // YetAnotherArduinoWiegandLibrary by paula-raca https://github.com/paulo-raca/YetAnotherArduinoWiegandLibrary
 #include <ArduinoJson.h>        // ArduinoJSON by Benoit Blanchon https://arduinojson.org/?utm_source=meta&utm_medium=library.properties
 #include <Ticker.h>             // Ticker by Bert Melis https://github.com/espressif/arduino-esp32/blob/master/libraries/Ticker
@@ -81,6 +81,8 @@ struct Config {
   char mqtt_topic[32];
   char mqtt_cmnd_topic[32];
   char mqtt_stat_topic[32];
+  char mqtt_ha_topic[32];
+  char mqtt_ha_status_topic[32];
   char mqtt_keys_topic[32];
   char mqtt_client_name[32];
   bool mqtt_auth;
@@ -169,7 +171,7 @@ int noteToIndex(note_t n) {
   }
 }
 
-// Simple helper to play a sequence of tones.
+// Helper to play sequence of tones.
 // freq[i] in Hz, dur[i] in ms. gapMs inserted between notes (can be 0).
 void toneSeq(const int *freq, const int *dur, size_t count, int gapMs) {
   for (size_t i = 0; i < count; ++i) {
@@ -229,6 +231,7 @@ const char* basicConfigTemplate = R"(
     "mqtt_server": "mqttBrokerAddress",
     "mqtt_port": 1883,
     "mqtt_topic": "dl32s3",
+    "ha_topic": "homeassistant",
     "mqtt_client_name": "dl32s3",
     "mqtt_tls": false,
     "mqtt_auth": false,
@@ -1229,11 +1232,14 @@ bool loadFSJSON_config(const char* config_filename, Config& config) {
   strlcpy(config.mqtt_server, config_doc["mqtt_server"] | "null_mqtt_server", sizeof(config.mqtt_server));
   config.mqtt_port = config_doc["mqtt_port"] | 1883;
   strlcpy(config.mqtt_topic, config_doc["mqtt_topic"] | "dl32s3", sizeof(config.mqtt_topic));
+  strlcpy(config.mqtt_ha_topic, config_doc["mqtt_ha_topic"] | "homeassistant", sizeof(config.mqtt_ha_topic));
   strlcpy(config.mqtt_stat_topic, config_doc["mqtt_topic"] | "dl32s3", sizeof(config.mqtt_stat_topic));
   strlcpy(config.mqtt_cmnd_topic, config_doc["mqtt_topic"] | "dl32s3", sizeof(config.mqtt_cmnd_topic));
   strlcpy(config.mqtt_keys_topic, config_doc["mqtt_topic"] | "dl32s3", sizeof(config.mqtt_keys_topic));
+  strlcpy(config.mqtt_ha_status_topic, config_doc["mqtt_ha_topic"] | "homeassistant", sizeof(config.mqtt_ha_status_topic));
   strcat(config.mqtt_stat_topic, "/stat");
   strcat(config.mqtt_cmnd_topic, "/cmnd");
+  strcat(config.mqtt_ha_status_topic, "/status");
   strcat(config.mqtt_keys_topic, "/keys");
   strlcpy(config.mqtt_client_name, config_doc["mqtt_client_name"] | "dl32s3", sizeof(config.mqtt_client_name));
   config.mqtt_auth = config_doc["mqtt_auth"] | false;
@@ -2174,14 +2180,37 @@ void checkBell() {
 }
 
 // Check magnetic sensor for open/closed door state (Optional)
-void checkMagSensor() {
-  if (door_open == true && digitalRead(config.magSensor_pin) == LOW && config.magsr_present) {
-    //send not that door has closed
-    door_open = false;
-    textOutput("door closed");
-  } else if (door_open == false && digitalRead(config.magSensor_pin) == HIGH && config.magsr_present) {
-    door_open = true;
-    textOutput("door opened");
+void checkMagSensor(bool forced) {
+  if (forced) {
+    if (digitalRead(config.magSensor_pin) == LOW && config.magsr_present) {
+      door_open = false;
+      textOutput("door closed");
+    } else if (digitalRead(config.magSensor_pin) == HIGH && config.magsr_present) {
+      door_open = true;
+      textOutput("door opened");
+    }
+  } else {
+    if (door_open == true && digitalRead(config.magSensor_pin) == LOW && config.magsr_present) {
+      door_open = false;
+      textOutput("door closed");
+    } else if (door_open == false && digitalRead(config.magSensor_pin) == HIGH && config.magsr_present) {
+      door_open = true;
+      textOutput("door opened");
+    }
+  }
+}
+
+void checkDoorLock(bool forced) {
+  if (config.garageMode == false) {
+    if (config.failSecure && (digitalRead(config.lockRelay_pin) == LOW) && forced) {
+      textOutput("locked");
+    } else if ((config.failSecure == false) && (digitalRead(config.lockRelay_pin) == HIGH) && forced) {
+      textOutput("locked");
+    } else if (config.failSecure && (digitalRead(config.lockRelay_pin) == HIGH) && forced) {
+      textOutput("unlocked");
+    } else if ((config.failSecure == false) && (digitalRead(config.lockRelay_pin) == LOW) && forced) {
+      textOutput("unlocked");
+    }
   }
 }
 
@@ -2686,16 +2715,19 @@ void startMQTTConnection_tls() {
 }
 
 void MQTTcallback(char* topic, byte* payload, unsigned int length) {
-  payload[length] = '\0';
-  Serial.print("Message arrived TOPIC:[");
-  Serial.print(topic);
-  Serial.print("] PAYLOAD:");
-  for (int i=0; i<length; i++) {
-    Serial.print((char)payload[i]);
+  char message[length + 1];
+  memcpy(message, payload, length);
+  message[length] = '\0';
+  Serial.print("MQTT message arrived on topic: "); Serial.println(topic);
+  Serial.print("Payload: "); Serial.println(message);
+  if (strcmp(topic, config.mqtt_cmnd_topic) == 0) {
+    executeCommand(message);
+  } else if ((strcmp(topic, config.mqtt_ha_status_topic) == 0) && (memcmp(payload, "online", 6) == 0)) {
+    if (memcmp(payload, "online", 6) == 0) {
+      Serial.print("Home Assistant Online, ");
+      refreshSensors(true);
+    }
   }
-  Serial.println();
-  executeCommand((char *)payload);
-  return;
 }
 
 void maintainConnectionMQTT() {
@@ -2717,6 +2749,7 @@ boolean mqttConnect() {
     if (mqttClient_tls.connect(config.mqtt_client_name)) {
       textOutput(("Connected to MQTT Broker " + String(config.mqtt_server) + ":" + String(config.mqtt_port) + " as " + String(config.mqtt_client_name)).c_str());
       mqttClient_tls.subscribe(config.mqtt_cmnd_topic);
+      mqttClient_tls.subscribe(config.mqtt_ha_status_topic);
       publishStats();
       publishStorage();
       return mqttClient_tls.connected();
@@ -2725,6 +2758,7 @@ boolean mqttConnect() {
     if (mqttClient_tls.connect(config.mqtt_client_name, config.mqtt_user, config.mqtt_password)) {
       textOutput(("Connected to MQTT Broker " + String(config.mqtt_server) + ":" + String(config.mqtt_port) + " as " + String(config.mqtt_client_name)).c_str());
       mqttClient_tls.subscribe(config.mqtt_cmnd_topic);
+      mqttClient_tls.subscribe(config.mqtt_ha_status_topic);
       publishStats();
       publishStorage();
       return mqttClient_tls.connected();
@@ -2734,6 +2768,7 @@ boolean mqttConnect() {
       mqttClient.setBufferSize(512);
       textOutput(("Connected to MQTT Broker " + String(config.mqtt_server) + ":" + String(config.mqtt_port) + " as " + String(config.mqtt_client_name)).c_str());
       mqttClient.subscribe(config.mqtt_cmnd_topic);
+      mqttClient.subscribe(config.mqtt_ha_status_topic);
       publishStats();
       return mqttClient.connected();
     }
@@ -2742,6 +2777,7 @@ boolean mqttConnect() {
       mqttClient.setBufferSize(512);
       textOutput(("Connected to MQTT Broker " + String(config.mqtt_server) + ":" + String(config.mqtt_port) + " as " + String(config.mqtt_client_name)).c_str());
       mqttClient.subscribe(config.mqtt_cmnd_topic);
+      mqttClient.subscribe(config.mqtt_ha_status_topic);
       publishStats();
       publishStorage();
       return mqttClient.connected();
@@ -2793,47 +2829,47 @@ int detectHardwareRevision() {
   // Read ADC value (averaged)
   uint16_t adc = readAdcAvg(attSensor_pin);
   float voltage = (adc * 3.3f) / 4095.0f;
-  //Serial.print("Version detect voltage = ");
-  //Serial.println(voltage);
+  Serial.print("Version detect voltage = ");
+  Serial.println(voltage);
   // Decide based on thresholds (replace 0 with real revision IDs later)
   if (voltage < 0.02f) {
     return 20240812;  // ~0 Ω
   } else if (voltage < 0.8f) {
-    return 20260325;  // 0.6 for revision 20260325
+    return 2;  // 0.6 for revision 20260325
   } else if (voltage < 0.12f) {
-    return 0;  // ~100 Ω
+    return 3;  // ~100 Ω
   } else if (voltage < 0.20f) {
-    return 1;  // ~220 Ω
+    return 4;  // ~220 Ω
   } else if (voltage < 0.30f) {
-    return 1;  // ~390 Ω
+    return 5;  // ~390 Ω
   } else if (voltage < 0.40f) {
-    return 1;  // ~560 Ω
+    return 6;  // ~560 Ω
   } else if (voltage < 0.55f) {
-    return 1;  // ~820 Ω
+    return 7;  // ~820 Ω
   } else if (voltage < 0.70f) {
-    return 1;  // ~1k0
+    return 8;  // ~1k0
   } else if (voltage < 0.85f) {
-    return 1;  // ~1k5
+    return 9;  // ~1k5
   } else if (voltage < 1.05f) {
-    return 1;  // ~2k0
+    return 10;  // ~2k0
   } else if (voltage < 1.30f) {
-    return 1;  // ~2k7
+    return 11;  // ~2k7
   } else if (voltage < 1.50f) {
-    return 1;  // ~3k3
+    return 12;  // ~3k3
   } else if (voltage < 1.70f) {
-    return 1;  // ~3k9
+    return 13;  // ~3k9
   } else if (voltage < 1.95f) {
-    return 1;  // ~4k7
+    return 14;  // ~4k7
   } else if (voltage < 2.20f) {
-    return 1;  // ~6k8
+    return 15;  // ~6k8
   } else if (voltage < 2.45f) {
-    return 1;  // ~8k2
+    return 16;  // ~8k2
   } else if (voltage < 2.70f) {
-    return 1;  // ~10k
+    return 17;  // ~10k
   } else if (voltage < 2.90f) {
-    return 1;  // ~15k
+    return 18;  // ~15k
   } else {
-    return 1;  // ~22k or higher
+    return 0;  // ~22k or higher
   }
 }
 
@@ -2897,6 +2933,8 @@ boolean executeCommand(String command) {
     restart(1);
   } else if (command.equals("reboot")) {
     restart(1);
+  } else if (command.equals("refresh-sensors")) {
+    refreshSensors(true);
   } else if (command.equals("github-ota")) {
     if (handleGithubOtaLatest()) {
       textOutput("GitHub OTA update completed successfully");
@@ -4630,6 +4668,16 @@ bool handleGithubOtaVersion(String version) {
   }
 }
 
+//------
+
+void refreshSensors(bool forced) {
+  if (forced) {
+    Serial.println("Forcing sensor refresh...");
+  }
+  checkMagSensor(forced);
+  checkDoorLock(forced);
+}
+
 // --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP --- SETUP ---
 
 void setup() {
@@ -4764,6 +4812,7 @@ void setup() {
   setPixBlue();
   textOutput("Ready.");
   textOutput("***");
+  refreshSensors(true);
 }
 
 // --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP --- LOOP ---
@@ -4805,7 +4854,7 @@ void loop() {
   }
   // Offline Functions
   checkKey();
-  checkMagSensor();
+  checkMagSensor(false);
   checkSerialCmd();
   checkExit();
   check0();
